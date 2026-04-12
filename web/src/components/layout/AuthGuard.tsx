@@ -1,0 +1,10 @@
+import { Navigate } from "react-router-dom";
+import type { ReactNode } from "react";
+
+export default function AuthGuard({ children }: { children: ReactNode }) {
+  const token = localStorage.getItem("alfred_token") ?? localStorage.getItem("ourcents_token");
+  if (!token) {
+    return <Navigate to="/login" replace />;
+  }
+  return <>{children}</>;
+}

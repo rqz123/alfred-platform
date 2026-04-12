@@ -1,0 +1,8 @@
+auth.py
+config.py
+pyproject.toml
+alfred_shared.egg-info/PKG-INFO
+alfred_shared.egg-info/SOURCES.txt
+alfred_shared.egg-info/dependency_links.txt
+alfred_shared.egg-info/requires.txt
+alfred_shared.egg-info/top_level.txt

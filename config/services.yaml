@@ -1,0 +1,10 @@
+services:
+  gateway:
+    url: http://gateway:8000
+    description: WhatsApp gateway
+  ourcents:
+    url: http://ourcents:8001
+    description: Family expense tracker
+  nudge:
+    url: http://nudge:8002
+    description: Reminder service

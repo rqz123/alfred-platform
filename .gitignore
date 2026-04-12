@@ -1,0 +1,17 @@
+.DS_Store
+**/__pycache__/
+**/.pytest_cache/
+**/.venv*/
+.env
+**/.env
+**/node_modules/
+**/dist/
+**/build/
+**/*.pyc
+**/*.log
+**/.wwebjs_auth/
+**/.wwebjs_cache/
+**/media/
+data/
+.pids
+.logs/
