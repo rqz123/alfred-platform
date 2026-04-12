@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Form, Header, HTTPException, Response, UploadFile, status
+from pydantic import BaseModel
 from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session
@@ -428,4 +429,64 @@ def receive_bridge_ack(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid bridge key")
 
     update_message_delivery_status(session, payload.provider_message_id, payload.delivery_status)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+class ServicePushRequest(BaseModel):
+    user_phone: str
+    message: str
+    source_service: str
+    quick_replies: list[str] = []
+
+
+@internal_router.post("/internal/push", status_code=status.HTTP_204_NO_CONTENT)
+def receive_service_push(
+    payload: ServicePushRequest,
+    x_alfred_api_key: str | None = Header(default=None),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Downstream services (OurCents, Nudge) call this to push a message to a user."""
+    import os
+    settings = get_settings()
+    valid_keys = {
+        k for k in [settings.ourcents_api_key, settings.nudge_api_key, settings.alfred_internal_key]
+        if k
+    }
+    if not valid_keys or x_alfred_api_key not in valid_keys:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid key")
+
+    body = payload.message
+    if payload.quick_replies:
+        body += "\n\n" + "  ".join(f"[{q}]" for q in payload.quick_replies)
+
+    # Find the contact and their active connection
+    from app.models.chat import Contact, Conversation, WhatsAppConnection
+    from sqlmodel import select as sqlmodel_select
+
+    normalized = "".join(c for c in payload.user_phone if c.isdigit())
+    contact = session.exec(
+        sqlmodel_select(Contact).where(Contact.phone_number == payload.user_phone)
+    ).first()
+    if contact is None:
+        # Try normalized phone
+        contact = session.exec(
+            sqlmodel_select(Contact).where(Contact.phone_number == normalized)
+        ).first()
+    if contact is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+
+    conv = session.exec(
+        sqlmodel_select(Conversation).where(Conversation.contact_id == contact.id)
+    ).first()
+    if conv is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No conversation for user")
+
+    if settings.whatsapp_mode == "bridge" and conv.connection_id:
+        conn_record = session.get(WhatsAppConnection, conv.connection_id)
+        if conn_record:
+            send_text_via_bridge(conn_record.bridge_session_id, contact.phone_number, body)
+    else:
+        from app.services.dispatch_service import _send_cloud_reply
+        _send_cloud_reply(contact.phone_number, body)
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)

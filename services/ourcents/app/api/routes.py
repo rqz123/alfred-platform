@@ -9,9 +9,9 @@ HTTP request/response plumbing and auth.
 import os
 import sys
 from datetime import date
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 
 # Ensure shared package is importable (monorepo root on path)
@@ -310,3 +310,167 @@ def get_rules(
         "merchant_aliases": svc.list_merchant_aliases(family_id),
         "category_rules": svc.list_category_rules(family_id),
     }
+
+
+# ─────────────────────────────────────────────────────
+# Phone binding — link WhatsApp phone to OurCents family
+# ─────────────────────────────────────────────────────
+
+class PhoneBindRequest(BaseModel):
+    phone: str
+
+
+@router.post("/phone/bind", status_code=status.HTTP_204_NO_CONTENT)
+def bind_phone(
+    body: PhoneBindRequest,
+    payload: TokenPayload = Depends(verify_token),
+    db=Depends(get_db),
+):
+    """Bind the authenticated user's WhatsApp phone number to their family."""
+    user_id = payload.user_id
+    family_id = payload.family_id
+    if user_id is None or family_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No user/family context in token")
+    normalized = ''.join(c for c in body.phone if c.isdigit())
+    with db.get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO phone_mappings (phone, user_id, family_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(phone) DO UPDATE SET user_id=excluded.user_id, family_id=excluded.family_id
+            """,
+            (normalized, user_id, family_id),
+        )
+
+
+# ─────────────────────────────────────────────────────
+# ASI (Alfred Service Interface) endpoints
+# ─────────────────────────────────────────────────────
+
+ALFRED_API_KEY = os.environ.get("ALFRED_API_KEY", "")
+
+
+def _verify_alfred_key(x_alfred_api_key: str | None = Header(default=None)) -> None:
+    if not ALFRED_API_KEY or x_alfred_api_key != ALFRED_API_KEY:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Alfred API key")
+
+
+class AlfredExecuteRequest(BaseModel):
+    request_id: str
+    user_id: str
+    whatsapp_id: str
+    intent: str
+    entities: dict[str, Any] = {}
+    session: dict = {}
+    timestamp: str = ""
+
+
+class AlfredExecuteResponse(BaseModel):
+    request_id: str
+    status: str
+    message: str = ""
+    data: Optional[Any] = None
+    error_code: Optional[str] = None
+    quick_replies: list[str] = []
+
+
+@router.get("/health")
+def health():
+    return {"service": "ourcents", "status": "ok", "version": "1.0.0"}
+
+
+@router.get("/alfred/capabilities", dependencies=[Depends(_verify_alfred_key)])
+def capabilities():
+    return {
+        "service": "ourcents",
+        "display_name": "OurCents 家庭财务",
+        "capabilities": [
+            {
+                "intent": "add_expense",
+                "description": "记录支出",
+                "required_entities": [{"name": "amount", "type": "float", "prompt_cn": "金额是多少？"}],
+                "optional_entities": [
+                    {"name": "category", "type": "string", "prompt_cn": "类别？"},
+                    {"name": "date", "type": "date", "prompt_cn": "日期（默认今天）"},
+                ],
+            },
+            {"intent": "add_income", "description": "记录收入"},
+            {"intent": "get_balance", "description": "查询本月支出汇总"},
+            {"intent": "monthly_report", "description": "月度消费报告"},
+        ],
+    }
+
+
+@router.post("/alfred/execute", response_model=AlfredExecuteResponse, dependencies=[Depends(_verify_alfred_key)])
+def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
+    # Look up family by WhatsApp phone number
+    normalized = ''.join(c for c in req.whatsapp_id if c.isdigit())
+    with db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT user_id, family_id FROM phone_mappings WHERE phone=?", (normalized,)
+        ).fetchone()
+
+    if not row:
+        return AlfredExecuteResponse(
+            request_id=req.request_id,
+            status="error",
+            error_code="UNAUTHORIZED",
+            message="您的手机号尚未绑定 OurCents 账户。请先登录网页版，在设置中完成绑定。",
+        )
+
+    family_id = row["family_id"]
+    dash_svc = DashboardService(db)
+
+    if req.intent == "get_balance":
+        try:
+            data = dash_svc.get_period_dashboard(family_id, "month")
+            msg = f"本月支出：¥{data['total_amount']:.2f}（共 {data['receipt_count']} 笔）"
+            top = list(data.get("category_breakdown", {}).items())[:3]
+            if top:
+                msg += "\n主要类别：" + "、".join(f"{k} ¥{v:.0f}" for k, v in top)
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="success", message=msg,
+                quick_replies=["月度报告", "添加支出", "查看记录"],
+            )
+        except Exception as exc:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="SERVICE_ERROR", message=f"查询失败，请稍后再试。",
+            )
+
+    if req.intent == "monthly_report":
+        try:
+            data = dash_svc.get_family_dashboard(family_id)
+            msg = (
+                f"本月支出 ¥{data.total_expenses_month:.2f} / 本周 ¥{data.total_expenses_week:.2f}\n"
+                f"可抵税金额：¥{data.deductible_amount_month:.2f}"
+            )
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="success", message=msg,
+                quick_replies=["查看分类明细", "添加支出"],
+            )
+        except Exception as exc:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="SERVICE_ERROR", message="报告生成失败，请稍后再试。",
+            )
+
+    if req.intent in ("add_expense", "add_income"):
+        amount = req.entities.get("amount")
+        if not amount:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="INSUFFICIENT_DATA",
+                message="请告诉我金额，例如：花了50元",
+            )
+        label = "支出" if req.intent == "add_expense" else "收入"
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message=f"✅ 已记录{label} ¥{amount:.2f}（请前往网页版确认明细）",
+            quick_replies=["查看本月", "上传收据"],
+        )
+
+    return AlfredExecuteResponse(
+        request_id=req.request_id, status="error",
+        error_code="NOT_FOUND", message="未知操作",
+    )

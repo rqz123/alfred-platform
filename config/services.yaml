@@ -1,10 +1,21 @@
 services:
-  gateway:
-    url: http://gateway:8000
-    description: WhatsApp gateway
   ourcents:
-    url: http://ourcents:8001
+    name: OurCents
+    url: http://localhost:8001
+    api_key_env: OURCENTS_API_KEY
     description: Family expense tracker
+    intents:
+      - add_expense
+      - add_income
+      - get_balance
+      - monthly_report
+
   nudge:
-    url: http://nudge:8002
-    description: Reminder service
+    name: Nudge
+    url: http://localhost:8002
+    api_key_env: NUDGE_API_KEY
+    description: Reminder and schedule service
+    intents:
+      - add_reminder
+      - list_reminders
+      - get_schedule

@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     tts_openai_model: str = "gpt-4o-mini-tts"
     tts_openai_voice: str = "alloy"
     tts_audio_format: str = "mp3"
+    dispatch_enabled: bool = False
+    ourcents_api_key: str = ""
+    nudge_api_key: str = ""
+    alfred_internal_key: str = ""
 
     model_config = SettingsConfigDict(
         # Try root monorepo .env first, then local .env for overrides

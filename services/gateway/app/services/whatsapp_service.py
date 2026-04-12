@@ -15,6 +15,7 @@ from app.repositories.chat_repository import (
     update_message_delivery_status,
 )
 from app.schemas.chat import MessageRead
+from app.services.dispatch_service import dispatch_message
 from app.services.stt_service import transcribe_audio_bytes
 from app.services.tts_service import synthesize_speech
 
@@ -48,7 +49,9 @@ def process_webhook_payload(session: Session, payload: dict) -> None:
             }
 
             for message in value.get("messages", []):
-                _persist_inbound_message(session, message, contacts_by_wa_id)
+                stored = _persist_inbound_message(session, message, contacts_by_wa_id)
+                if stored:
+                    dispatch_message(session, stored)
 
             for status_item in value.get("statuses", []):
                 provider_message_id = status_item.get("id")
@@ -142,10 +145,10 @@ def _persist_inbound_message(
     session: Session,
     message: dict,
     contacts_by_wa_id: dict[str, str | None],
-) -> None:
+) -> MessageRead | None:
     sender_phone = message.get("from")
     if not sender_phone:
-        return
+        return None
 
     display_name = contacts_by_wa_id.get(sender_phone)
     contact = create_or_get_contact(session, sender_phone, display_name)
@@ -156,7 +159,7 @@ def _persist_inbound_message(
     transcript = None
     if message_type == "audio" and media_url:
         transcript = _transcribe_audio_reference(media_url)
-    create_inbound_message(
+    return create_inbound_message(
         session,
         conversation,
         provider_message_id=provider_message_id,

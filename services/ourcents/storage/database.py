@@ -236,6 +236,19 @@ class Database:
                 )
             """)
 
+            # Phone mappings table — links WhatsApp phone numbers to OurCents families
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS phone_mappings (
+                    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                    phone     TEXT UNIQUE NOT NULL,
+                    user_id   INTEGER NOT NULL,
+                    family_id INTEGER NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id),
+                    FOREIGN KEY (family_id) REFERENCES families(id)
+                )
+            """)
+
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_merchant_aliases_lookup
                 ON merchant_aliases(family_id, alias_normalized, priority)
