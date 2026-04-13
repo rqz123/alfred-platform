@@ -19,12 +19,15 @@ logger = logging.getLogger('alfred.intent')
 # ──────────────────────────────────────────────────────────────────
 
 KEYWORD_MAP = [
+    # More specific intents MUST come before generic ones that share substrings.
+    # '消费报告' must match monthly_report before add_expense's '消费'.
+    # '查看提醒' must match list_reminders before add_reminder's '提醒'.
+    (['月报', '月度', '消费报告', '月账单', '本月'],            'monthly_report'),
+    (['提醒列表', '我的提醒', '查看提醒', '有什么提醒'],        'list_reminders'),
     (['花了', '消费', '买了', '付了', '支出', '记账', '花费'], 'add_expense'),
     (['收入', '工资', '收到', '入账', '赚了'],                 'add_income'),
     (['余额', '还剩', '账户', '结余', '多少钱'],               'get_balance'),
-    (['本月', '月报', '月度', '消费报告', '月账单'],            'monthly_report'),
     (['提醒', '提示', 'remind', '别忘了', '记得', '待办'],     'add_reminder'),
-    (['提醒列表', '我的提醒', '查看提醒', '有什么提醒'],        'list_reminders'),
     (['日程', '今天有什么', '安排', '日历'],                    'get_schedule'),
 ]
 
