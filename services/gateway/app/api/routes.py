@@ -446,7 +446,6 @@ def receive_service_push(
     session: Session = Depends(get_session),
 ) -> Response:
     """Downstream services (OurCents, Nudge) call this to push a message to a user."""
-    import os
     settings = get_settings()
     valid_keys = {
         k for k in [settings.ourcents_api_key, settings.nudge_api_key, settings.alfred_internal_key]
@@ -459,27 +458,14 @@ def receive_service_push(
     if payload.quick_replies:
         body += "\n\n" + "  ".join(f"[{q}]" for q in payload.quick_replies)
 
-    # Find the contact and their active connection
-    from app.models.chat import Contact, Conversation, WhatsAppConnection
-    from sqlmodel import select as sqlmodel_select
+    # Upsert contact and conversation so push works even before the user has
+    # messaged Alfred (solves bootstrap problem for Nudge reminders etc.)
+    from app.models.chat import WhatsAppConnection
+    from app.repositories.chat_repository import create_or_get_contact, get_or_create_conversation
 
-    normalized = "".join(c for c in payload.user_phone if c.isdigit())
-    contact = session.exec(
-        sqlmodel_select(Contact).where(Contact.phone_number == payload.user_phone)
-    ).first()
-    if contact is None:
-        # Try normalized phone
-        contact = session.exec(
-            sqlmodel_select(Contact).where(Contact.phone_number == normalized)
-        ).first()
-    if contact is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    conv = session.exec(
-        sqlmodel_select(Conversation).where(Conversation.contact_id == contact.id)
-    ).first()
-    if conv is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No conversation for user")
+    phone = normalize_phone_number(payload.user_phone)
+    contact = create_or_get_contact(session, phone, display_name=None)
+    conv = get_or_create_conversation(session, contact)
 
     if settings.whatsapp_mode == "bridge" and conv.connection_id:
         conn_record = session.get(WhatsAppConnection, conv.connection_id)

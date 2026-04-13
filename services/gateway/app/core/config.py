@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     ourcents_api_key: str = ""
     nudge_api_key: str = ""
     alfred_internal_key: str = ""
+    intent_openai_api_key: str = ""
+    intent_openai_model: str = "gpt-4o-mini"
 
     model_config = SettingsConfigDict(
         # Try root monorepo .env first, then local .env for overrides
