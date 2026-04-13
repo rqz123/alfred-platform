@@ -77,9 +77,9 @@ class TestPushBootstrap:
             "/api/internal/push",
             json={
                 "user_phone": phone,
-                "message": "⏰ 测试提醒",
+                "message": "Test reminder",
                 "source_service": "nudge",
-                "quick_replies": ["查看提醒"],
+                "quick_replies": ["View reminders"],
             },
             headers={"X-Alfred-API-Key": "test-internal-key"},
         )

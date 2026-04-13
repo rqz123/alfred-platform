@@ -384,20 +384,20 @@ def health():
 def capabilities():
     return {
         "service": "ourcents",
-        "display_name": "OurCents 家庭财务",
+        "display_name": "OurCents Family Finance",
         "capabilities": [
             {
                 "intent": "add_expense",
-                "description": "记录支出",
-                "required_entities": [{"name": "amount", "type": "float", "prompt_cn": "金额是多少？"}],
+                "description": "Record an expense",
+                "required_entities": [{"name": "amount", "type": "float", "prompt": "How much did you spend?"}],
                 "optional_entities": [
-                    {"name": "category", "type": "string", "prompt_cn": "类别？"},
-                    {"name": "date", "type": "date", "prompt_cn": "日期（默认今天）"},
+                    {"name": "category", "type": "string", "prompt": "Category?"},
+                    {"name": "date", "type": "date", "prompt": "Date (default: today)"},
                 ],
             },
-            {"intent": "add_income", "description": "记录收入"},
-            {"intent": "get_balance", "description": "查询本月支出汇总"},
-            {"intent": "monthly_report", "description": "月度消费报告"},
+            {"intent": "add_income", "description": "Record income"},
+            {"intent": "get_balance", "description": "Query this month's balance"},
+            {"intent": "monthly_report", "description": "Monthly spending report"},
         ],
     }
 
@@ -416,7 +416,7 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
             request_id=req.request_id,
             status="error",
             error_code="UNAUTHORIZED",
-            message="您的手机号尚未绑定 OurCents 账户。请先登录网页版，在设置中完成绑定。",
+            message="Your phone number is not linked to an OurCents account. Please log in to the web app and bind your number in Settings.",
         )
 
     family_id = row["family_id"]
@@ -439,22 +439,22 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
             net = income_total - expense_total
             sign = "+" if net >= 0 else ""
             msg = (
-                f"本月收支\n"
-                f"  收入：¥{income_total:.2f}\n"
-                f"  支出：¥{expense_total:.2f}（{data['receipt_count']} 笔）\n"
-                f"  净额：{sign}¥{net:.2f}"
+                f"This month\n"
+                f"  Income:  ¥{income_total:.2f}\n"
+                f"  Expense: ¥{expense_total:.2f} ({data['receipt_count']} txns)\n"
+                f"  Net:     {sign}¥{net:.2f}"
             )
             top = list(data.get("category_breakdown", {}).items())[:3]
             if top:
-                msg += "\n主要支出：" + "、".join(f"{k} ¥{v:.0f}" for k, v in top)
+                msg += "\nTop categories: " + ", ".join(f"{k} ¥{v:.0f}" for k, v in top)
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success", message=msg,
-                quick_replies=["月度报告", "添加支出", "记录收入"],
+                quick_replies=["Monthly report", "Add expense", "Add income"],
             )
         except Exception:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
-                error_code="SERVICE_ERROR", message="查询失败，请稍后再试。",
+                error_code="SERVICE_ERROR", message="Query failed, please try again.",
             )
 
     if req.intent == "monthly_report":
@@ -473,20 +473,20 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
             net = income_total - data.total_expenses_month
             sign = "+" if net >= 0 else ""
             msg = (
-                f"本月财务报告\n"
-                f"  收入：¥{income_total:.2f}（{income_cnt} 笔）\n"
-                f"  支出：¥{data.total_expenses_month:.2f} / 本周 ¥{data.total_expenses_week:.2f}\n"
-                f"  净额：{sign}¥{net:.2f}\n"
-                f"  可抵税：¥{data.deductible_amount_month:.2f}"
+                f"Monthly report\n"
+                f"  Income:     ¥{income_total:.2f} ({income_cnt} txns)\n"
+                f"  Expense:    ¥{data.total_expenses_month:.2f} / this week ¥{data.total_expenses_week:.2f}\n"
+                f"  Net:        {sign}¥{net:.2f}\n"
+                f"  Deductible: ¥{data.deductible_amount_month:.2f}"
             )
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success", message=msg,
-                quick_replies=["查看分类明细", "添加支出", "记录收入"],
+                quick_replies=["View breakdown", "Add expense", "Add income"],
             )
         except Exception:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
-                error_code="SERVICE_ERROR", message="报告生成失败，请稍后再试。",
+                error_code="SERVICE_ERROR", message="Report generation failed, please try again.",
             )
 
     if req.intent == "add_expense":
@@ -495,7 +495,7 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
                 error_code="INSUFFICIENT_DATA",
-                message="请告诉我金额，例如：花了50元",
+                message="Please tell me the amount, e.g.: spent 50 on lunch",
             )
 
         user_id = row["user_id"]
@@ -529,7 +529,7 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
                     "    (family_id, user_id, upload_file_id, merchant_name, merchant_normalized, "
                     "     purchase_date, total_amount, currency, category, status, confidence_score) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (family_id, user_id, upload_id, "WhatsApp 快速支出", "whatsapp_expense",
+                    (family_id, user_id, upload_id, "WhatsApp quick expense", "whatsapp_expense",
                      purchase_date, float(amount), "CNY", category_val, "confirmed", 1.0),
                 )
                 receipt_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -547,13 +547,13 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
                 )
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
-                message=f"✅ 已记录支出 ¥{float(amount):.2f}（{purchase_date}，{category_val}）",
-                quick_replies=["查看本月", "上传收据"],
+                message=f"Expense recorded: ¥{float(amount):.2f} ({purchase_date}, {category_val})",
+                quick_replies=["This month", "Upload receipt"],
             )
         except Exception:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
-                error_code="SERVICE_ERROR", message="记录失败，请稍后再试。",
+                error_code="SERVICE_ERROR", message="Failed to save, please try again.",
             )
 
     if req.intent == "add_income":
@@ -562,7 +562,7 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
                 error_code="INSUFFICIENT_DATA",
-                message="请告诉我收入金额，例如：收到工资5000元",
+                message="Please tell me the income amount, e.g.: received salary 5000",
             )
 
         user_id = row["user_id"]
@@ -590,7 +590,7 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
                     "    (family_id, user_id, amount, currency, category, source, income_date, notes) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                     (family_id, user_id, float(amount), "CNY", income_category,
-                     "whatsapp", income_date, "WhatsApp 快速记录"),
+                     "whatsapp", income_date, "WhatsApp quick entry"),
                 )
                 entry_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                 conn.execute(
@@ -601,16 +601,16 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
                 )
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
-                message=f"✅ 已记录收入 ¥{float(amount):.2f}（{income_date}，{income_category}）",
-                quick_replies=["查看余额", "查看本月"],
+                message=f"Income recorded: ¥{float(amount):.2f} ({income_date}, {income_category})",
+                quick_replies=["Check balance", "This month"],
             )
         except Exception:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
-                error_code="SERVICE_ERROR", message="记录失败，请稍后再试。",
+                error_code="SERVICE_ERROR", message="Failed to save, please try again.",
             )
 
     return AlfredExecuteResponse(
         request_id=req.request_id, status="error",
-        error_code="NOT_FOUND", message="未知操作",
+        error_code="NOT_FOUND", message="Unknown intent",
     )

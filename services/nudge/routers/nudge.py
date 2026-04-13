@@ -130,16 +130,16 @@ def health():
 def capabilities():
     return {
         "service": "nudge",
-        "display_name": "Nudge 提醒助手",
+        "display_name": "Nudge Reminder Assistant",
         "capabilities": [
             {
                 "intent": "add_reminder",
-                "description": "添加提醒",
-                "required_entities": [{"name": "title", "type": "string", "prompt_cn": "提醒内容是什么？"}],
-                "optional_entities": [{"name": "date", "type": "date", "prompt_cn": "什么时候提醒？"}],
+                "description": "Add a reminder",
+                "required_entities": [{"name": "title", "type": "string", "prompt": "What should I remind you about?"}],
+                "optional_entities": [{"name": "date", "type": "date", "prompt": "When should I remind you?"}],
             },
-            {"intent": "list_reminders", "description": "查看当前有效提醒"},
-            {"intent": "get_schedule", "description": "查看今日日程"},
+            {"intent": "list_reminders", "description": "List active reminders"},
+            {"intent": "get_schedule", "description": "View today's schedule"},
         ],
     }
 
@@ -157,17 +157,17 @@ async def alfred_execute(req: AlfredExecuteRequest):
         if not rows:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
-                message="您目前没有待处理的提醒。",
-                quick_replies=["添加提醒"],
+                message="You have no pending reminders.",
+                quick_replies=["Add reminder"],
             )
         lines = []
         for r in rows:
-            fire = r.get("nextFireAt") or r.get("fireAt") or "待定"
-            lines.append(f"• {r['title']} — {fire}")
+            fire = r.get("nextFireAt") or r.get("fireAt") or "TBD"
+            lines.append(f"- {r['title']} @ {fire}")
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
-            message="您的待办提醒：\n" + "\n".join(lines),
-            quick_replies=["添加提醒"],
+            message="Your reminders:\n" + "\n".join(lines),
+            quick_replies=["Add reminder"],
         )
 
     if req.intent in ("add_reminder", "get_schedule"):
@@ -176,7 +176,7 @@ async def alfred_execute(req: AlfredExecuteRequest):
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
                 error_code="INSUFFICIENT_DATA",
-                message="请告诉我提醒内容，例如：提醒我明天开会",
+                message="Please tell me what to remind you about, e.g.: remind me to call John tomorrow",
             )
         # Parse and create reminder using the existing parse service
         try:
@@ -215,14 +215,14 @@ async def alfred_execute(req: AlfredExecuteRequest):
             conn.execute(insert(reminders).values(**row))
             conn.commit()
 
-        fire_display = next_fire or "待确认"
+        fire_display = next_fire or "TBD"
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
-            message=f"✅ 提醒已设置：{row['title']}\n时间：{fire_display}",
-            quick_replies=["查看我的提醒"],
+            message=f"Reminder set: {row['title']}\nAt: {fire_display}",
+            quick_replies=["View my reminders"],
         )
 
     return AlfredExecuteResponse(
         request_id=req.request_id, status="error",
-        error_code="NOT_FOUND", message="未知操作",
+        error_code="NOT_FOUND", message="Unknown intent",
     )

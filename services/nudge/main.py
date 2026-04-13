@@ -56,9 +56,9 @@ async def _fire_due_reminders() -> None:
                             f"{GATEWAY_URL}/api/internal/push",
                             json={
                                 "user_phone": phone,
-                                "message": f"⏰ 提醒：{body_text}",
+                                "message": f"Reminder: {body_text}",
                                 "source_service": "nudge",
-                                "quick_replies": ["查看我的提醒"],
+                                "quick_replies": ["View my reminders"],
                             },
                             headers={"X-Alfred-API-Key": NUDGE_API_KEY},
                         )

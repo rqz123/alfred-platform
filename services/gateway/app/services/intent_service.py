@@ -5,6 +5,10 @@ Primary path: LLM-based (gpt-4o-mini) with structured JSON output.
 Fallback: keyword matching (used when INTENT_OPENAI_API_KEY is absent or LLM call fails).
 
 Returns {'intent': str, 'entities': dict} or None if no intent matched.
+
+Note: Chinese keyword patterns are stored as Unicode escape sequences so the
+source file remains ASCII-safe, but the strings are functionally identical to
+the corresponding Chinese characters at runtime.
 """
 
 import json
@@ -16,19 +20,38 @@ logger = logging.getLogger('alfred.intent')
 
 # ──────────────────────────────────────────────────────────────────
 # Keyword fallback (v1)
+# Chinese keywords encoded as Unicode escapes to keep source ASCII-clean.
+# More specific intents MUST come before generic ones that share substrings:
+#   monthly_report  before  add_expense  (\u6d88\u8d39\u62a5\u544a vs \u6d88\u8d39)
+#   list_reminders  before  add_reminder (\u67e5\u770b\u63d0\u9192 vs \u63d0\u9192)
 # ──────────────────────────────────────────────────────────────────
 
 KEYWORD_MAP = [
-    # More specific intents MUST come before generic ones that share substrings.
-    # '消费报告' must match monthly_report before add_expense's '消费'.
-    # '查看提醒' must match list_reminders before add_reminder's '提醒'.
-    (['月报', '月度', '消费报告', '月账单', '本月'],            'monthly_report'),
-    (['提醒列表', '我的提醒', '查看提醒', '有什么提醒'],        'list_reminders'),
-    (['花了', '消费', '买了', '付了', '支出', '记账', '花费'], 'add_expense'),
-    (['收入', '工资', '收到', '入账', '赚了'],                 'add_income'),
-    (['余额', '还剩', '账户', '结余', '多少钱'],               'get_balance'),
-    (['提醒', '提示', 'remind', '别忘了', '记得', '待办'],     'add_reminder'),
-    (['日程', '今天有什么', '安排', '日历'],                    'get_schedule'),
+    # monthly_report: \u6708\u62a5=monthly-report, \u6708\u5ea6=monthly,
+    #   \u6d88\u8d39\u62a5\u544a=expense-report, \u6708\u8d26\u5355=bill, \u672c\u6708=this-month
+    (['\u6708\u62a5', '\u6708\u5ea6', '\u6d88\u8d39\u62a5\u544a', '\u6708\u8d26\u5355', '\u672c\u6708'],
+     'monthly_report'),
+    # list_reminders: \u63d0\u9192\u5217\u8868=reminder-list, \u6211\u7684\u63d0\u9192=my-reminders,
+    #   \u67e5\u770b\u63d0\u9192=view-reminders, \u6709\u4ec0\u4e48\u63d0\u9192=what-reminders
+    (['\u63d0\u9192\u5217\u8868', '\u6211\u7684\u63d0\u9192', '\u67e5\u770b\u63d0\u9192',
+      '\u6709\u4ec0\u4e48\u63d0\u9192'],
+     'list_reminders'),
+    # add_expense: spent/consumed/bought/paid/expense/bookkeeping/cost
+    (['\u82b1\u4e86', '\u6d88\u8d39', '\u4e70\u4e86', '\u4ed8\u4e86', '\u652f\u51fa',
+      '\u8bb0\u8d26', '\u82b1\u8d39'],
+     'add_expense'),
+    # add_income: income/salary/received/credited/earned
+    (['\u6536\u5165', '\u5de5\u8d44', '\u6536\u5230', '\u5165\u8d26', '\u8d5a\u4e86'],
+     'add_income'),
+    # get_balance: balance/remaining/account/surplus/how-much
+    (['\u4f59\u989d', '\u8fd8\u5269', '\u8d26\u6237', '\u7ed3\u4f59', '\u591a\u5c11\u94b1'],
+     'get_balance'),
+    # add_reminder: remind/hint/remind/don't-forget/remember/todo + english 'remind'
+    (['\u63d0\u9192', '\u63d0\u793a', 'remind', '\u522b\u5fd8\u4e86', '\u8bb0\u5f97', '\u5f85\u529e'],
+     'add_reminder'),
+    # get_schedule: schedule/what-today/arrangement/calendar
+    (['\u65e5\u7a0b', '\u4eca\u5929\u6709\u4ec0\u4e48', '\u5b89\u6392', '\u65e5\u5386'],
+     'get_schedule'),
 ]
 
 VALID_INTENTS = {
@@ -48,30 +71,46 @@ def _keyword_detect(text: str) -> Optional[dict]:
 def _extract_entities(text: str, intent: str) -> dict:
     entities: dict = {}
 
-    m = re.search(r'[¥$￥]?\s*([0-9]+(?:\.[0-9]{1,2})?)', text)
+    # Amount: e.g. 50, ¥50, $50, 50.5
+    m = re.search(r'[\xa5$\uff65]?\s*([0-9]+(?:\.[0-9]{1,2})?)', text)
     if m:
         entities['amount'] = float(m.group(1))
 
-    if '今天' in text:
+    # Date keywords
+    if '\u4eca\u5929' in text:       # today
         entities['date'] = 'today'
-    elif '明天' in text:
+    elif '\u660e\u5929' in text:     # tomorrow
         entities['date'] = 'tomorrow'
-    elif '昨天' in text:
+    elif '\u6628\u5929' in text:     # yesterday
         entities['date'] = 'yesterday'
 
+    # Category hints for expense/income
     if intent in ('add_expense', 'add_income'):
-        for category, keywords in [
-            ('food', ['吃', '饭', '餐', '外卖', '咖啡', '奶茶']),
-            ('transport', ['打车', '滴滴', '地铁', '公交', '加油']),
-            ('shopping', ['买', '购物', '网购', '淘宝', '京东']),
-            ('medical', ['医院', '药', '看病', '诊所']),
+        # food: eat/meal/dish/takeaway/coffee/bubble-tea
+        food_kw = ['\u5403', '\u996d', '\u9910', '\u5916\u5356', '\u5496\u5561', '\u5976\u8336']
+        # transport: taxi/didi/subway/bus/gas
+        transport_kw = ['\u6253\u8f66', '\u6ef4\u6ef4', '\u5730\u94c1', '\u516c\u4ea4', '\u52a0\u6cb9']
+        # shopping: buy/shop/online-shop/taobao/jd
+        shopping_kw = ['\u4e70', '\u8d2d\u7269', '\u7f51\u8d2d', '\u6dd8\u5b9d', '\u4eac\u4e1c']
+        # medical: hospital/medicine/see-doctor/clinic
+        medical_kw = ['\u533b\u9662', '\u836f', '\u770b\u75c5', '\u8bca\u6240']
+        for category, kw_list in [
+            ('food', food_kw),
+            ('transport', transport_kw),
+            ('shopping', shopping_kw),
+            ('medical', medical_kw),
         ]:
-            if any(k in text for k in keywords):
+            if any(k in text for k in kw_list):
                 entities['category'] = category
                 break
 
+    # Reminder title: extract content after trigger word
+    # trigger words: \u63d0\u9192=remind, \u522b\u5fd8\u4e86=don't-forget, \u8bb0\u5f97=remember
     if intent == 'add_reminder':
-        m2 = re.search(r'(?:提醒|别忘了|记得)[我]?\s*(.{2,20})', text)
+        m2 = re.search(
+            r'(?:\u63d0\u9192|\u522b\u5fd8\u4e86|\u8bb0\u5f97)[\u6211]?\s*(.{2,20})',
+            text,
+        )
         if m2:
             entities['title'] = m2.group(1).strip()
 
