@@ -425,38 +425,71 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
     if req.intent == "get_balance":
         try:
             data = dash_svc.get_period_dashboard(family_id, "month")
-            msg = f"本月支出：¥{data['total_amount']:.2f}（共 {data['receipt_count']} 笔）"
+            expense_total = data['total_amount']
+            # Also query income for this month
+            today = date.today()
+            month_start = today.replace(day=1).isoformat()
+            with db.get_connection() as conn:
+                income_row = conn.execute(
+                    "SELECT COALESCE(SUM(amount), 0) AS total FROM income_entries "
+                    "WHERE family_id=? AND income_date >= ?",
+                    (family_id, month_start),
+                ).fetchone()
+            income_total = income_row["total"] if income_row else 0.0
+            net = income_total - expense_total
+            sign = "+" if net >= 0 else ""
+            msg = (
+                f"本月收支\n"
+                f"  收入：¥{income_total:.2f}\n"
+                f"  支出：¥{expense_total:.2f}（{data['receipt_count']} 笔）\n"
+                f"  净额：{sign}¥{net:.2f}"
+            )
             top = list(data.get("category_breakdown", {}).items())[:3]
             if top:
-                msg += "\n主要类别：" + "、".join(f"{k} ¥{v:.0f}" for k, v in top)
+                msg += "\n主要支出：" + "、".join(f"{k} ¥{v:.0f}" for k, v in top)
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success", message=msg,
-                quick_replies=["月度报告", "添加支出", "查看记录"],
+                quick_replies=["月度报告", "添加支出", "记录收入"],
             )
-        except Exception as exc:
+        except Exception:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
-                error_code="SERVICE_ERROR", message=f"查询失败，请稍后再试。",
+                error_code="SERVICE_ERROR", message="查询失败，请稍后再试。",
             )
 
     if req.intent == "monthly_report":
         try:
             data = dash_svc.get_family_dashboard(family_id)
+            today = date.today()
+            month_start = today.replace(day=1).isoformat()
+            with db.get_connection() as conn:
+                inc_row = conn.execute(
+                    "SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS cnt "
+                    "FROM income_entries WHERE family_id=? AND income_date >= ?",
+                    (family_id, month_start),
+                ).fetchone()
+            income_total = inc_row["total"] if inc_row else 0.0
+            income_cnt = inc_row["cnt"] if inc_row else 0
+            net = income_total - data.total_expenses_month
+            sign = "+" if net >= 0 else ""
             msg = (
-                f"本月支出 ¥{data.total_expenses_month:.2f} / 本周 ¥{data.total_expenses_week:.2f}\n"
-                f"可抵税金额：¥{data.deductible_amount_month:.2f}"
+                f"本月财务报告\n"
+                f"  收入：¥{income_total:.2f}（{income_cnt} 笔）\n"
+                f"  支出：¥{data.total_expenses_month:.2f} / 本周 ¥{data.total_expenses_week:.2f}\n"
+                f"  净额：{sign}¥{net:.2f}\n"
+                f"  可抵税：¥{data.deductible_amount_month:.2f}"
             )
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success", message=msg,
-                quick_replies=["查看分类明细", "添加支出"],
+                quick_replies=["查看分类明细", "添加支出", "记录收入"],
             )
-        except Exception as exc:
+        except Exception:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
                 error_code="SERVICE_ERROR", message="报告生成失败，请稍后再试。",
             )
 
-    if req.intent in ("add_expense", "add_income"):
+    if req.intent == "add_expense":
         amount = req.entities.get("amount")
         if not amount:
             return AlfredExecuteResponse(
@@ -466,16 +499,11 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
             )
 
         user_id = row["user_id"]
-        label = "支出" if req.intent == "add_expense" else "收入"
-
-        # Map extracted category to ExpenseCategory value
         _category_map = {
             "food": "food", "transport": "transportation",
             "medical": "healthcare", "shopping": "other",
         }
         category_val = _category_map.get(req.entities.get("category", ""), "other")
-
-        # Resolve purchase date
         _date_kw = req.entities.get("date", "today")
         today = date.today()
         if _date_kw == "yesterday":
@@ -485,67 +513,101 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
         else:
             purchase_date = today.isoformat()
 
-        merchant_name = f"WhatsApp 快速{label}"
-        merchant_normalized = f"whatsapp_{label}"
-
         try:
             with db.get_connection() as conn:
-                # Create a virtual upload_files record (no actual file)
                 file_hash = f"wa_{_uuid.uuid4().hex}"
                 conn.execute(
-                    """
-                    INSERT INTO upload_files
-                        (family_id, user_id, filename, content_hash, file_size, mime_type, storage_path)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
+                    "INSERT INTO upload_files "
+                    "    (family_id, user_id, filename, content_hash, file_size, mime_type, storage_path) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (family_id, user_id, "whatsapp_quick_entry", file_hash,
                      0, "text/plain", "virtual://whatsapp"),
                 )
                 upload_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-                # Insert confirmed receipt
                 conn.execute(
-                    """
-                    INSERT INTO receipts
-                        (family_id, user_id, upload_file_id, merchant_name, merchant_normalized,
-                         purchase_date, total_amount, currency, category, status, confidence_score)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (family_id, user_id, upload_id, merchant_name, merchant_normalized,
+                    "INSERT INTO receipts "
+                    "    (family_id, user_id, upload_file_id, merchant_name, merchant_normalized, "
+                    "     purchase_date, total_amount, currency, category, status, confidence_score) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (family_id, user_id, upload_id, "WhatsApp 快速支出", "whatsapp_expense",
                      purchase_date, float(amount), "CNY", category_val, "confirmed", 1.0),
                 )
                 receipt_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-                # Insert deduction placeholder
                 conn.execute(
-                    """
-                    INSERT INTO receipt_deductions
-                        (receipt_id, is_deductible, deduction_type, evidence_text, evidence_level, amount)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    """,
+                    "INSERT INTO receipt_deductions "
+                    "    (receipt_id, is_deductible, deduction_type, evidence_text, evidence_level, amount) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
                     (receipt_id, False, "none", "", "none", 0.0),
                 )
-
-                # Audit log
                 conn.execute(
-                    """
-                    INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details)
-                    VALUES (?, ?, ?, ?, ?)
-                    """,
+                    "INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) "
+                    "VALUES (?, ?, ?, ?, ?)",
                     (user_id, "create", "receipt", receipt_id,
-                     f"WhatsApp quick {label}: ¥{amount:.2f}"),
+                     f"WhatsApp quick expense: ¥{amount:.2f}"),
                 )
-
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
-                message=f"✅ 已记录{label} ¥{amount:.2f}（{purchase_date}，类别：{category_val}）",
+                message=f"✅ 已记录支出 ¥{float(amount):.2f}（{purchase_date}，{category_val}）",
                 quick_replies=["查看本月", "上传收据"],
             )
-        except Exception as exc:
+        except Exception:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
-                error_code="SERVICE_ERROR",
-                message="记录失败，请稍后再试。",
+                error_code="SERVICE_ERROR", message="记录失败，请稍后再试。",
+            )
+
+    if req.intent == "add_income":
+        amount = req.entities.get("amount")
+        if not amount:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="INSUFFICIENT_DATA",
+                message="请告诉我收入金额，例如：收到工资5000元",
+            )
+
+        user_id = row["user_id"]
+        _income_category_map = {
+            "food": "other", "transport": "other",
+            "medical": "other", "shopping": "other",
+        }
+        # Simple income category: salary if no specific category extracted
+        income_category = req.entities.get("category", "salary")
+        if income_category not in ("salary", "bonus", "other"):
+            income_category = "other"
+        _date_kw = req.entities.get("date", "today")
+        today = date.today()
+        if _date_kw == "yesterday":
+            income_date = (today - timedelta(days=1)).isoformat()
+        elif _date_kw == "tomorrow":
+            income_date = (today + timedelta(days=1)).isoformat()
+        else:
+            income_date = today.isoformat()
+
+        try:
+            with db.get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO income_entries "
+                    "    (family_id, user_id, amount, currency, category, source, income_date, notes) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (family_id, user_id, float(amount), "CNY", income_category,
+                     "whatsapp", income_date, "WhatsApp 快速记录"),
+                )
+                entry_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                conn.execute(
+                    "INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (user_id, "create", "income_entry", entry_id,
+                     f"WhatsApp quick income: ¥{amount:.2f}"),
+                )
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="success",
+                message=f"✅ 已记录收入 ¥{float(amount):.2f}（{income_date}，{income_category}）",
+                quick_replies=["查看余额", "查看本月"],
+            )
+        except Exception:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="SERVICE_ERROR", message="记录失败，请稍后再试。",
             )
 
     return AlfredExecuteResponse(

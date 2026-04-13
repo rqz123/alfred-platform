@@ -250,6 +250,28 @@ class Database:
             """)
 
             cursor.execute("""
+                CREATE TABLE IF NOT EXISTS income_entries (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    family_id   INTEGER NOT NULL,
+                    user_id     INTEGER NOT NULL,
+                    amount      REAL NOT NULL,
+                    currency    TEXT DEFAULT 'CNY',
+                    category    TEXT NOT NULL DEFAULT 'other',
+                    source      TEXT,
+                    income_date DATE NOT NULL,
+                    notes       TEXT,
+                    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (family_id) REFERENCES families(id),
+                    FOREIGN KEY (user_id) REFERENCES users(id)
+                )
+            """)
+
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_income_entries_date
+                ON income_entries(family_id, income_date)
+            """)
+
+            cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_merchant_aliases_lookup
                 ON merchant_aliases(family_id, alias_normalized, priority)
             """)
