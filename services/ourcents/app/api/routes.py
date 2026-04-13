@@ -8,7 +8,8 @@ HTTP request/response plumbing and auth.
 
 import os
 import sys
-from datetime import date
+import uuid as _uuid
+from datetime import date, datetime, timedelta
 from typing import Any, List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile, status
@@ -463,12 +464,89 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
                 error_code="INSUFFICIENT_DATA",
                 message="请告诉我金额，例如：花了50元",
             )
+
+        user_id = row["user_id"]
         label = "支出" if req.intent == "add_expense" else "收入"
-        return AlfredExecuteResponse(
-            request_id=req.request_id, status="success",
-            message=f"✅ 已记录{label} ¥{amount:.2f}（请前往网页版确认明细）",
-            quick_replies=["查看本月", "上传收据"],
-        )
+
+        # Map extracted category to ExpenseCategory value
+        _category_map = {
+            "food": "food", "transport": "transportation",
+            "medical": "healthcare", "shopping": "other",
+        }
+        category_val = _category_map.get(req.entities.get("category", ""), "other")
+
+        # Resolve purchase date
+        _date_kw = req.entities.get("date", "today")
+        today = date.today()
+        if _date_kw == "yesterday":
+            purchase_date = (today - timedelta(days=1)).isoformat()
+        elif _date_kw == "tomorrow":
+            purchase_date = (today + timedelta(days=1)).isoformat()
+        else:
+            purchase_date = today.isoformat()
+
+        merchant_name = f"WhatsApp 快速{label}"
+        merchant_normalized = f"whatsapp_{label}"
+
+        try:
+            with db.get_connection() as conn:
+                # Create a virtual upload_files record (no actual file)
+                file_hash = f"wa_{_uuid.uuid4().hex}"
+                conn.execute(
+                    """
+                    INSERT INTO upload_files
+                        (family_id, user_id, filename, content_hash, file_size, mime_type, storage_path)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (family_id, user_id, "whatsapp_quick_entry", file_hash,
+                     0, "text/plain", "virtual://whatsapp"),
+                )
+                upload_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+                # Insert confirmed receipt
+                conn.execute(
+                    """
+                    INSERT INTO receipts
+                        (family_id, user_id, upload_file_id, merchant_name, merchant_normalized,
+                         purchase_date, total_amount, currency, category, status, confidence_score)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (family_id, user_id, upload_id, merchant_name, merchant_normalized,
+                     purchase_date, float(amount), "CNY", category_val, "confirmed", 1.0),
+                )
+                receipt_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+                # Insert deduction placeholder
+                conn.execute(
+                    """
+                    INSERT INTO receipt_deductions
+                        (receipt_id, is_deductible, deduction_type, evidence_text, evidence_level, amount)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (receipt_id, False, "none", "", "none", 0.0),
+                )
+
+                # Audit log
+                conn.execute(
+                    """
+                    INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details)
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (user_id, "create", "receipt", receipt_id,
+                     f"WhatsApp quick {label}: ¥{amount:.2f}"),
+                )
+
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="success",
+                message=f"✅ 已记录{label} ¥{amount:.2f}（{purchase_date}，类别：{category_val}）",
+                quick_replies=["查看本月", "上传收据"],
+            )
+        except Exception as exc:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="SERVICE_ERROR",
+                message="记录失败，请稍后再试。",
+            )
 
     return AlfredExecuteResponse(
         request_id=req.request_id, status="error",

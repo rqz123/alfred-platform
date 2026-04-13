@@ -203,7 +203,7 @@ async def alfred_execute(req: AlfredExecuteRequest):
             "fireAt": fire_at,
             "cronExpression": cron,
             "timezone": parsed.get("timezone", "Asia/Shanghai"),
-            "triggerSource": "whatsapp",
+            "triggerSource": req.whatsapp_id,
             "triggerCondition": parsed.get("triggerCondition"),
             "status": "active",
             "lastFiredAt": None,
