@@ -398,6 +398,12 @@ def capabilities():
             {"intent": "add_income", "description": "Record income"},
             {"intent": "get_balance", "description": "Query this month's balance"},
             {"intent": "monthly_report", "description": "Monthly spending report"},
+            {
+                "intent": "set_budget",
+                "description": "Set a monthly spending budget for a category",
+                "required_entities": [{"name": "amount", "type": "float", "prompt": "What is the budget amount?"}],
+                "optional_entities": [{"name": "category", "type": "string", "prompt": "Which category? (food/transport/shopping/medical/overall)"}],
+            },
         ],
     }
 
@@ -447,6 +453,22 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
             top = list(data.get("category_breakdown", {}).items())[:3]
             if top:
                 msg += "\nTop categories: " + ", ".join(f"{k} ¥{v:.0f}" for k, v in top)
+            # Show budget progress per category if any budgets are set
+            with db.get_connection() as conn:
+                budget_rows = conn.execute(
+                    "SELECT category, amount FROM budgets WHERE family_id=? AND period='monthly'",
+                    (family_id,),
+                ).fetchall()
+            if budget_rows:
+                cat_breakdown = data.get("category_breakdown", {})
+                budget_lines = []
+                for brow in budget_rows:
+                    cat = brow["category"]
+                    budget_amt = brow["amount"]
+                    spent = cat_breakdown.get(cat, 0.0)
+                    pct = int(spent / budget_amt * 100) if budget_amt else 0
+                    budget_lines.append(f"  {cat}: ¥{spent:.0f}/¥{budget_amt:.0f} ({pct}%)")
+                msg += "\nBudget:\n" + "\n".join(budget_lines)
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success", message=msg,
                 quick_replies=["Monthly report", "Add expense", "Add income"],
@@ -608,6 +630,36 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
                 error_code="SERVICE_ERROR", message="Failed to save, please try again.",
+            )
+
+    if req.intent == "set_budget":
+        amount = req.entities.get("amount")
+        if not amount:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="INSUFFICIENT_DATA",
+                message="Please tell me the budget amount, e.g.: set food budget 1000",
+            )
+        user_id = row["user_id"]
+        category = req.entities.get("category", "overall")
+        try:
+            with db.get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO budgets (family_id, user_id, category, period, amount, currency, updated_at) "
+                    "VALUES (?, ?, ?, 'monthly', ?, 'CNY', datetime('now')) "
+                    "ON CONFLICT(family_id, category, period) "
+                    "DO UPDATE SET amount=excluded.amount, updated_at=excluded.updated_at",
+                    (family_id, user_id, category, float(amount)),
+                )
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="success",
+                message=f"Budget set: {category} ¥{float(amount):.2f}/month",
+                quick_replies=["Check balance", "Monthly report"],
+            )
+        except Exception:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="SERVICE_ERROR", message="Failed to save budget, please try again.",
             )
 
     return AlfredExecuteResponse(

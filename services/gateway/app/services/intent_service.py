@@ -23,6 +23,7 @@ logger = logging.getLogger('alfred.intent')
 # Chinese keywords encoded as Unicode escapes to keep source ASCII-clean.
 # More specific intents MUST come before generic ones that share substrings:
 #   monthly_report  before  add_expense  (\u6d88\u8d39\u62a5\u544a vs \u6d88\u8d39)
+#   set_budget      before  add_expense  (\u82b1\u8d39\u4e0a\u9650 shares \u82b1\u8d39)
 #   list_reminders  before  add_reminder (\u67e5\u770b\u63d0\u9192 vs \u63d0\u9192)
 # ──────────────────────────────────────────────────────────────────
 
@@ -31,6 +32,10 @@ KEYWORD_MAP = [
     #   \u6d88\u8d39\u62a5\u544a=expense-report, \u6708\u8d26\u5355=bill, \u672c\u6708=this-month
     (['\u6708\u62a5', '\u6708\u5ea6', '\u6d88\u8d39\u62a5\u544a', '\u6708\u8d26\u5355', '\u672c\u6708'],
      'monthly_report'),
+    # set_budget: \u9884\u7b97=budget, \u9650\u989d=limit,
+    #   \u82b1\u8d39\u4e0a\u9650=spending-cap, \u6bcf\u6708\u9884\u7b97=monthly-budget
+    (['\u9884\u7b97', '\u9650\u989d', '\u82b1\u8d39\u4e0a\u9650', '\u6bcf\u6708\u9884\u7b97'],
+     'set_budget'),
     # list_reminders: \u63d0\u9192\u5217\u8868=reminder-list, \u6211\u7684\u63d0\u9192=my-reminders,
     #   \u67e5\u770b\u63d0\u9192=view-reminders, \u6709\u4ec0\u4e48\u63d0\u9192=what-reminders
     (['\u63d0\u9192\u5217\u8868', '\u6211\u7684\u63d0\u9192', '\u67e5\u770b\u63d0\u9192',
@@ -56,7 +61,7 @@ KEYWORD_MAP = [
 
 VALID_INTENTS = {
     'add_expense', 'add_income', 'get_balance', 'monthly_report',
-    'add_reminder', 'list_reminders', 'get_schedule',
+    'set_budget', 'add_reminder', 'list_reminders', 'get_schedule',
 }
 
 
@@ -84,8 +89,8 @@ def _extract_entities(text: str, intent: str) -> dict:
     elif '\u6628\u5929' in text:     # yesterday
         entities['date'] = 'yesterday'
 
-    # Category hints for expense/income
-    if intent in ('add_expense', 'add_income'):
+    # Category hints for expense/income/budget
+    if intent in ('add_expense', 'add_income', 'set_budget'):
         # food: eat/meal/dish/takeaway/coffee/bubble-tea
         food_kw = ['\u5403', '\u996d', '\u9910', '\u5916\u5356', '\u5496\u5561', '\u5976\u8336']
         # transport: taxi/didi/subway/bus/gas
@@ -131,7 +136,7 @@ _INTENT_SCHEMA = {
                 "type": "string",
                 "enum": [
                     "add_expense", "add_income", "get_balance", "monthly_report",
-                    "add_reminder", "list_reminders", "get_schedule", "none",
+                    "set_budget", "add_reminder", "list_reminders", "get_schedule", "none",
                 ],
             },
             "confidence": {"type": "number"},
@@ -159,6 +164,7 @@ _SYSTEM_PROMPT = (
     "- add_income: user recorded receiving money\n"
     "- get_balance: user asks about account balance or remaining money\n"
     "- monthly_report: user wants a monthly spending summary\n"
+    "- set_budget: user wants to set a spending budget for a category\n"
     "- add_reminder: user wants to set a reminder or to-do\n"
     "- list_reminders: user wants to see their active reminders\n"
     "- get_schedule: user asks about today's schedule or calendar\n"

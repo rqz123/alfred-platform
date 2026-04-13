@@ -271,6 +271,24 @@ class Database:
                 ON income_entries(family_id, income_date)
             """)
 
+            # Budgets: one row per family/category/period; upserted on set_budget
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS budgets (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    family_id   INTEGER NOT NULL,
+                    user_id     INTEGER NOT NULL,
+                    category    TEXT NOT NULL,
+                    period      TEXT NOT NULL DEFAULT 'monthly',
+                    amount      REAL NOT NULL,
+                    currency    TEXT DEFAULT 'CNY',
+                    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (family_id) REFERENCES families(id),
+                    FOREIGN KEY (user_id) REFERENCES users(id),
+                    UNIQUE (family_id, category, period)
+                )
+            """)
+
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_merchant_aliases_lookup
                 ON merchant_aliases(family_id, alias_normalized, priority)

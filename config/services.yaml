@@ -9,6 +9,7 @@ services:
       - add_income
       - get_balance
       - monthly_report
+      - set_budget
 
   nudge:
     name: Nudge
