@@ -1,7 +1,7 @@
 import sys
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
 # Add monorepo root to path for local dev so `shared` package is importable
@@ -144,6 +144,31 @@ def capabilities():
     }
 
 
+def _day_utc_bounds(date_entity: str):
+    """Return (start_iso, end_iso) UTC strings for the target date in Asia/Shanghai (UTC+8)."""
+    now_local = datetime.now(timezone.utc) + timedelta(hours=8)
+    if date_entity == "tomorrow":
+        target = (now_local + timedelta(days=1)).date()
+    elif date_entity == "yesterday":
+        target = (now_local - timedelta(days=1)).date()
+    else:
+        target = now_local.date()
+    # Midnight Asia/Shanghai = UTC-8h the same calendar day
+    day_start = datetime(target.year, target.month, target.day, 0, 0, 0) - timedelta(hours=8)
+    day_end = day_start + timedelta(days=1)
+    return target, day_start.strftime("%Y-%m-%dT%H:%M:%S"), day_end.strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _fmt_utc_time(iso: str) -> str:
+    """Convert a UTC ISO string to Asia/Shanghai HH:MM for display."""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        local = dt.replace(tzinfo=timezone.utc) + timedelta(hours=8)
+        return local.strftime("%H:%M")
+    except Exception:
+        return iso
+
+
 @router.post("/alfred/execute", response_model=AlfredExecuteResponse, dependencies=[Depends(_verify_alfred_key)])
 async def alfred_execute(req: AlfredExecuteRequest):
     if req.intent == "list_reminders":
@@ -170,7 +195,39 @@ async def alfred_execute(req: AlfredExecuteRequest):
             quick_replies=["Add reminder"],
         )
 
-    if req.intent in ("add_reminder", "get_schedule"):
+    if req.intent == "get_schedule":
+        date_entity = req.entities.get("date", "today")
+        target_date, start_iso, end_iso = _day_utc_bounds(date_entity)
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(reminders).where(
+                    reminders.c.status == "active",
+                    reminders.c.nextFireAt >= start_iso,
+                    reminders.c.nextFireAt < end_iso,
+                ).order_by(reminders.c.nextFireAt)
+            ).mappings().all()
+
+        label = {"today": "Today", "tomorrow": "Tomorrow", "yesterday": "Yesterday"}.get(
+            date_entity, "Today"
+        )
+        if not rows:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="success",
+                message=f"No reminders scheduled for {label.lower()} ({target_date}).",
+                quick_replies=["Add reminder", "View all reminders"],
+            )
+        lines = [
+            f"- {r['title']} @ {_fmt_utc_time(r['nextFireAt'])}"
+            for r in rows
+        ]
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message=f"{label}'s schedule ({target_date}):\n" + "\n".join(lines),
+            quick_replies=["Add reminder", "View all reminders"],
+        )
+
+    if req.intent == "add_reminder":
         title = req.entities.get("title", "")
         if not title:
             return AlfredExecuteResponse(
