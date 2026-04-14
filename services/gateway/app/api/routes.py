@@ -473,6 +473,6 @@ def receive_service_push(
             send_text_via_bridge(conn_record.bridge_session_id, contact.phone_number, body)
     else:
         from app.services.dispatch_service import _send_cloud_reply
-        _send_cloud_reply(contact.phone_number, body)
+        _send_cloud_reply(contact.phone_number, body, settings)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)

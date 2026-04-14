@@ -238,3 +238,14 @@ def detect_intent(text: str) -> Optional[dict]:
         # Fall through to keyword on LLM failure
 
     return _keyword_detect(text)
+
+
+def extract_entities(text: str, intent: str) -> dict:
+    """
+    Extract entities from text given a known intent.
+
+    Used by the multi-turn follow-up path: when we already know the intent
+    from a previous turn, we call this to pull entities from the user's
+    supplementary message (e.g. "50 yuan" after "花了钱" was already routed).
+    """
+    return _extract_entities(text.lower(), intent)
