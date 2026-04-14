@@ -6,9 +6,12 @@ Business logic lives entirely in those layers — this file only handles
 HTTP request/response plumbing and auth.
 """
 
+import logging
 import os
 import sys
 import uuid as _uuid
+
+logger = logging.getLogger("ourcents.routes")
 from datetime import date, datetime, timedelta
 from typing import Any, List, Optional
 
@@ -449,12 +452,24 @@ def capabilities():
                 "required_entities": [{"name": "amount", "type": "float", "prompt": "What is the budget amount?"}],
                 "optional_entities": [{"name": "category", "type": "string", "prompt": "Which category? (food/transport/shopping/medical/overall)"}],
             },
+            {
+                "intent": "process_receipt_image",
+                "description": "Process a WhatsApp receipt image through AI OCR and store the expense",
+                "required_entities": [
+                    {"name": "image_data", "type": "string", "prompt": "Base64-encoded image bytes"},
+                    {"name": "mime_type", "type": "string", "prompt": "Image MIME type"},
+                ],
+                "optional_entities": [
+                    {"name": "filename", "type": "string", "prompt": "Original filename"},
+                    {"name": "caption", "type": "string", "prompt": "User caption accompanying the image"},
+                ],
+            },
         ],
     }
 
 
 @router.post("/alfred/execute", response_model=AlfredExecuteResponse, dependencies=[Depends(_verify_alfred_key)])
-def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
+async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_storage=Depends(get_file_storage)):
     # Look up family by WhatsApp phone number
     normalized = ''.join(c for c in req.whatsapp_id if c.isdigit())
     with db.get_connection() as conn:
@@ -706,6 +721,66 @@ def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db)):
                 request_id=req.request_id, status="error",
                 error_code="SERVICE_ERROR", message="Failed to save budget, please try again.",
             )
+
+    if req.intent == "process_receipt_image":
+        import base64
+        image_b64 = req.entities.get("image_data")
+        mime_type = req.entities.get("mime_type", "image/jpeg")
+        filename = req.entities.get("filename", "receipt.jpg")
+        if not image_b64:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="INSUFFICIENT_DATA", message="No image data provided.",
+            )
+        try:
+            image_bytes = base64.b64decode(image_b64)
+        except Exception:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="INVALID_VALUE", message="Image data could not be decoded.",
+            )
+
+        user_id = row["user_id"]
+        svc = ReceiptIngestionService(db, file_storage)
+        try:
+            upload_status, receipt_id, extra = await svc.process_receipt_upload(
+                family_id=family_id,
+                user_id=user_id,
+                file_content=image_bytes,
+                filename=filename,
+                mime_type=mime_type,
+            )
+        except Exception as exc:
+            logger.error("Receipt image processing failed: %s", exc)
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="SERVICE_ERROR",
+                message="Receipt processing failed. Please try uploading via the web app.",
+            )
+
+        if upload_status == "duplicate":
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="success",
+                message="This receipt looks like a duplicate — it may already be recorded.",
+                quick_replies=["View receipts", "Check balance"],
+            )
+
+        # Build a human-readable confirmation from the extracted data
+        merchant = extra.get("merchant_name", "Unknown merchant") if extra else "Unknown merchant"
+        amount = extra.get("total_amount") if extra else None
+        category = extra.get("category", "") if extra else ""
+        if amount:
+            msg_text = f"Receipt recorded: {merchant} ¥{float(amount):.2f}"
+            if category:
+                msg_text += f" ({category})"
+        else:
+            msg_text = f"Receipt received from {merchant}. Please review in the web app to confirm details."
+
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message=msg_text,
+            quick_replies=["Check balance", "Monthly report", "View receipts"],
+        )
 
     return AlfredExecuteResponse(
         request_id=req.request_id, status="error",

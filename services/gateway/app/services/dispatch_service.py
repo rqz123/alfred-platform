@@ -69,6 +69,11 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
         return
     phone = contact.phone_number
 
+    # ── Image message → receipt processing ────────────────────────
+    if msg.message_type == "image" and msg.media_url:
+        _handle_image(session, conv, phone, msg, settings)
+        return
+
     # ── Cancel? ───────────────────────────────────────────────────
     if is_cancel(text):
         pending = get_pending(phone)
@@ -103,6 +108,50 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
 # ──────────────────────────────────────────────────────────────────
 # Internal helpers
 # ──────────────────────────────────────────────────────────────────
+
+def _handle_image(
+    session: Session,
+    conv: Conversation,
+    phone: str,
+    msg: MessageRead,
+    settings,
+) -> None:
+    """Download a WhatsApp image and forward it to OurCents for receipt processing."""
+    import base64
+    # Lazy import to avoid circular dependency (whatsapp_service imports dispatch_service)
+    from app.services.whatsapp_service import download_media_bytes
+
+    try:
+        media = download_media_bytes(msg.media_url)
+    except Exception as exc:
+        logger.error('Image download failed for media_url=%s: %s', msg.media_url, exc)
+        _reply(session, conv, phone,
+               "I couldn't download the image. Please try again.", settings)
+        return
+
+    service = _registry.find_service('process_receipt_image')
+    if service is None:
+        logger.warning('No service registered for process_receipt_image')
+        return
+
+    image_b64 = base64.b64encode(media['content']).decode()
+    entities = {
+        'image_data': image_b64,
+        'mime_type': media.get('content_type', 'image/jpeg'),
+        'filename': media.get('filename', 'receipt.jpg'),
+        'caption': msg.body,  # user's caption text, if any
+    }
+
+    # Image processing (AI OCR) can take longer — use 60s timeout
+    resp = _call_service(service, phone, msg.conversation_id,
+                         'process_receipt_image', entities, timeout=60.0)
+    if resp is None:
+        _reply(session, conv, phone,
+               "Receipt processing failed. Please try again.", settings)
+        return
+
+    _reply_from_resp(session, conv, phone, resp, settings)
+
 
 def _handle_fresh(
     session: Session,
@@ -176,6 +225,7 @@ def _call_service(
     conversation_id: str,
     intent: str,
     entities: dict,
+    timeout: float = 15.0,
 ) -> dict | None:
     """POST to /alfred/execute and return the parsed JSON, or None on error."""
     payload = {
@@ -192,7 +242,7 @@ def _call_service(
             f"{service['url']}/alfred/execute",
             json=payload,
             headers={'X-Alfred-API-Key': service['api_key']},
-            timeout=15.0,
+            timeout=timeout,
         )
         r.raise_for_status()
         return r.json()
