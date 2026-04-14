@@ -83,3 +83,29 @@ export function confirmReceipt(id: number, body: Record<string, unknown>) {
 export function getRules() {
   return request<Record<string, unknown>>("/api/ourcents/settings/rules");
 }
+
+// ── Phone bindings ──────────────────────────────────────────────
+
+export interface PhoneBinding {
+  id: number;
+  phone: string;
+  username: string;
+  created_at: string;
+}
+
+export function listPhoneBindings() {
+  return request<PhoneBinding[]>("/api/ourcents/phone/bindings");
+}
+
+export function bindPhone(phone: string) {
+  return request<void>("/api/ourcents/phone/bind", {
+    method: "POST",
+    body: JSON.stringify({ phone }),
+  });
+}
+
+export function unbindPhone(phone: string) {
+  return request<void>(`/api/ourcents/phone/bindings/${encodeURIComponent(phone)}`, {
+    method: "DELETE",
+  });
+}

@@ -7,6 +7,7 @@ import Dashboard from "./pages/ourcents/Dashboard";
 import Upload from "./pages/ourcents/Upload";
 import Receipts from "./pages/ourcents/Receipts";
 import NudgePage from "./pages/nudge/NudgePage";
+import SettingsPage from "./pages/SettingsPage";
 
 function Layout() {
   return (
@@ -36,6 +37,7 @@ export default function App() {
           <Route path="/ourcents/upload" element={<Upload />} />
           <Route path="/ourcents/receipts" element={<Receipts />} />
           <Route path="/nudge" element={<NudgePage />} />
+          <Route path="/settings" element={<SettingsPage />} />
           <Route path="/" element={<Navigate to="/alfred" replace />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />

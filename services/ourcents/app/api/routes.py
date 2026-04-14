@@ -321,6 +321,29 @@ class PhoneBindRequest(BaseModel):
     phone: str
 
 
+@router.get("/phone/bindings")
+def list_phone_bindings(
+    payload: TokenPayload = Depends(verify_token),
+    db=Depends(get_db),
+):
+    """Return all phone numbers bound to the current family."""
+    family_id = payload.family_id
+    if family_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No family context in token")
+    with db.get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT pm.id, pm.phone, pm.created_at, u.username
+            FROM phone_mappings pm
+            JOIN users u ON u.id = pm.user_id
+            WHERE pm.family_id = ?
+            ORDER BY pm.created_at DESC
+            """,
+            (family_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 @router.post("/phone/bind", status_code=status.HTTP_204_NO_CONTENT)
 def bind_phone(
     body: PhoneBindRequest,
@@ -333,6 +356,8 @@ def bind_phone(
     if user_id is None or family_id is None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No user/family context in token")
     normalized = ''.join(c for c in body.phone if c.isdigit())
+    if not normalized:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Invalid phone number")
     with db.get_connection() as conn:
         conn.execute(
             """
@@ -342,6 +367,26 @@ def bind_phone(
             """,
             (normalized, user_id, family_id),
         )
+
+
+@router.delete("/phone/bindings/{phone}", status_code=status.HTTP_204_NO_CONTENT)
+def unbind_phone(
+    phone: str,
+    payload: TokenPayload = Depends(verify_token),
+    db=Depends(get_db),
+):
+    """Remove a phone binding (only allowed within the same family)."""
+    family_id = payload.family_id
+    if family_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No family context in token")
+    normalized = ''.join(c for c in phone if c.isdigit())
+    with db.get_connection() as conn:
+        result = conn.execute(
+            "DELETE FROM phone_mappings WHERE phone=? AND family_id=?",
+            (normalized, family_id),
+        )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Binding not found")
 
 
 # ─────────────────────────────────────────────────────
