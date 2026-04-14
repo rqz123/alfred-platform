@@ -25,10 +25,13 @@ class ServiceRegistry:
         self._map = {}
         for svc_id, svc in cfg.get('services', {}).items():
             api_key = os.environ.get(svc.get('api_key_env', ''), '')
+            # url_env allows Docker deployments to override localhost URLs
+            # e.g. OURCENTS_URL=http://ourcents:8001 overrides services.yaml default
+            url = os.environ.get(svc.get('url_env', ''), '') or svc.get('url', '')
             entry = {
                 'id': svc_id,
                 'name': svc.get('name', svc_id),
-                'url': svc.get('url', ''),
+                'url': url,
                 'api_key': api_key,
             }
             for intent in svc.get('intents', []):

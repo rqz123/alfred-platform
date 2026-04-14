@@ -16,11 +16,21 @@ COPY shared /shared
 RUN pip install --no-cache-dir -e /shared
 
 # Install service dependencies
-RUN pip install --no-cache-dir fastapi "uvicorn[standard]" sqlmodel pydantic-settings \
-    "python-jose[cryptography]" python-multipart httpx
+# Keep in sync with pyproject.toml [project.dependencies]
+RUN pip install --no-cache-dir \
+    fastapi \
+    "uvicorn[standard]" \
+    sqlmodel \
+    "pydantic-settings" \
+    "python-jose[cryptography]" \
+    python-multipart \
+    httpx \
+    pyyaml \
+    "openai>=1.0.0"
 
-# Copy service source
+# Copy service source and service registry config
 COPY services/gateway/app ./app
+COPY config /config
 
 # Copy built frontend so gateway can serve it
 COPY --from=frontend-build /web/dist ./dist

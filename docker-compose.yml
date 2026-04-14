@@ -4,7 +4,12 @@ networks:
   alfred-net:
     driver: bridge
 
+volumes:
+  alfred-data:   # shared persistent storage for all services
+
 services:
+
+  # ── Bridge (Node.js WhatsApp Web adapter) ─────────────────────
   bridge:
     build:
       context: bridge
@@ -12,6 +17,8 @@ services:
     ports:
       - "3001:3001"
     env_file: .env
+    environment:
+      BACKEND_BASE_URL: http://gateway:8000/api
     networks:
       - alfred-net
     restart: unless-stopped
@@ -22,6 +29,59 @@ services:
       retries: 3
       start_period: 20s
 
+  # ── OurCents (expense tracker) ─────────────────────────────────
+  ourcents:
+    build:
+      context: .
+      dockerfile: services/ourcents/Dockerfile
+    ports:
+      - "8001:8001"
+    env_file: .env
+    environment:
+      OURCENTS_DATABASE_PATH: /data/ourcents.db
+      OURCENTS_RECEIPTS_STORAGE_PATH: /data/receipts
+      OURCENTS_TEMP_UPLOAD_PATH: /data/temp
+      # ALFRED_API_KEY must equal OURCENTS_API_KEY in .env
+      ALFRED_API_KEY: ${OURCENTS_API_KEY}
+    volumes:
+      - alfred-data:/data
+    networks:
+      - alfred-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/api/ourcents/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Nudge (reminder service) ───────────────────────────────────
+  nudge:
+    build:
+      context: .
+      dockerfile: services/nudge/Dockerfile
+    ports:
+      - "8002:8002"
+    env_file: .env
+    environment:
+      NUDGE_DATABASE_URL: sqlite:////data/nudge.db
+      # ALFRED_API_KEY must equal NUDGE_API_KEY in .env
+      ALFRED_API_KEY: ${NUDGE_API_KEY}
+      # Nudge pushes reminders back to Gateway via this URL
+      GATEWAY_URL: http://gateway:8000
+    volumes:
+      - alfred-data:/data
+    networks:
+      - alfred-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/api/nudge/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ── Gateway (FastAPI backend + React frontend) ─────────────────
   gateway:
     build:
       context: .
@@ -29,11 +89,22 @@ services:
     ports:
       - "8000:8000"
     env_file: .env
+    environment:
+      # Service-to-service URLs (use container names, not localhost)
+      OURCENTS_URL: http://ourcents:8001
+      NUDGE_URL: http://nudge:8002
+      # Dispatch enabled
+      DISPATCH_ENABLED: "true"
+      # Bridge URL for WhatsApp Web mode
+      BRIDGE_BASE_URL: http://bridge:3001
     volumes:
-      - ./data:/data
-      - ./config:/config
+      - alfred-data:/data
     depends_on:
       bridge:
+        condition: service_healthy
+      ourcents:
+        condition: service_healthy
+      nudge:
         condition: service_healthy
     networks:
       - alfred-net
@@ -43,42 +114,4 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
-
-  ourcents:
-    build:
-      context: .
-      dockerfile: services/ourcents/Dockerfile
-    ports:
-      - "8001:8001"
-    env_file: .env
-    volumes:
-      - ./data:/data
-    networks:
-      - alfred-net
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/docs')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
-
-  nudge:
-    build:
-      context: .
-      dockerfile: services/nudge/Dockerfile
-    ports:
-      - "8002:8002"
-    env_file: .env
-    volumes:
-      - ./data:/data
-    networks:
-      - alfred-net
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/docs')"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
+      start_period: 20s

@@ -1,7 +1,8 @@
 services:
   ourcents:
     name: OurCents
-    url: http://localhost:8001
+    url: http://localhost:8001      # overridden by OURCENTS_URL in Docker
+    url_env: OURCENTS_URL
     api_key_env: OURCENTS_API_KEY
     description: Family expense tracker
     intents:
@@ -14,7 +15,8 @@ services:
 
   nudge:
     name: Nudge
-    url: http://localhost:8002
+    url: http://localhost:8002      # overridden by NUDGE_URL in Docker
+    url_env: NUDGE_URL
     api_key_env: NUDGE_API_KEY
     description: Reminder and schedule service
     intents:
