@@ -27,7 +27,7 @@ set -a
 source "$REPO/.env"
 set +a
 
-# ── Start services ─────────────────────────────────────────────────────────────
+# ── Start services (nohup so they survive terminal close) ─────────────────────
 
 echo "Starting Alfred Platform..."
 echo ""
@@ -35,13 +35,13 @@ echo ""
 # Bridge (Node.js)
 echo "  [1/5] bridge       → http://localhost:3001"
 cd "$REPO/bridge"
-node src/server.mjs > "$LOG_DIR/bridge.log" 2>&1 &
+nohup node src/server.mjs > "$LOG_DIR/bridge.log" 2>&1 &
 echo $! >> "$PID_FILE"
 
 # Gateway (Python — serves frontend in prod mode)
 echo "  [2/5] gateway      → http://localhost:8000"
 cd "$REPO/services/gateway"
-"$REPO/services/gateway/.venv/bin/uvicorn" app.main:app \
+nohup "$REPO/services/gateway/.venv/bin/uvicorn" app.main:app \
   --host 0.0.0.0 --port 8000 --reload \
   > "$LOG_DIR/gateway.log" 2>&1 &
 echo $! >> "$PID_FILE"
@@ -49,7 +49,7 @@ echo $! >> "$PID_FILE"
 # OurCents
 echo "  [3/5] ourcents     → http://localhost:8001"
 cd "$REPO/services/ourcents"
-"$REPO/services/ourcents/.venv/bin/uvicorn" main:app \
+nohup "$REPO/services/ourcents/.venv/bin/uvicorn" main:app \
   --host 0.0.0.0 --port 8001 --reload \
   > "$LOG_DIR/ourcents.log" 2>&1 &
 echo $! >> "$PID_FILE"
@@ -57,7 +57,7 @@ echo $! >> "$PID_FILE"
 # Nudge
 echo "  [4/5] nudge        → http://localhost:8002"
 cd "$REPO/services/nudge"
-"$REPO/services/nudge/.venv/bin/uvicorn" main:app \
+nohup "$REPO/services/nudge/.venv/bin/uvicorn" main:app \
   --host 0.0.0.0 --port 8002 --reload \
   > "$LOG_DIR/nudge.log" 2>&1 &
 echo $! >> "$PID_FILE"
@@ -65,21 +65,34 @@ echo $! >> "$PID_FILE"
 # Frontend dev server
 echo "  [5/5] frontend     → http://localhost:5173"
 cd "$REPO/web"
-npm run dev > "$LOG_DIR/frontend.log" 2>&1 &
+nohup npm run dev > "$LOG_DIR/frontend.log" 2>&1 &
 echo $! >> "$PID_FILE"
 
 cd "$REPO"
 
-# ── Done ──────────────────────────────────────────────────────────────────────
+# ── Wait and verify ───────────────────────────────────────────────────────────
 
 echo ""
-echo "All services started. Waiting a moment for them to initialize..."
-sleep 3
+echo "All services started. Waiting for them to initialize..."
+sleep 10
+
+# Quick health check (use 127.0.0.1 to avoid IPv6 resolution issues)
+FAILED=0
+curl -sf http://127.0.0.1:8000/docs             > /dev/null 2>&1 || { echo "  ✗ gateway failed — check .logs/gateway.log";  FAILED=1; }
+curl -sf http://127.0.0.1:8001/api/ourcents/health > /dev/null 2>&1 || { echo "  ✗ ourcents failed — check .logs/ourcents.log"; FAILED=1; }
+curl -sf http://127.0.0.1:8002/api/nudge/health  > /dev/null 2>&1 || { echo "  ✗ nudge failed — check .logs/nudge.log";    FAILED=1; }
+curl -sf http://127.0.0.1:3001/health            > /dev/null 2>&1 || { echo "  ✗ bridge failed — check .logs/bridge.log";   FAILED=1; }
+
+if [ $FAILED -eq 0 ]; then
+  echo ""
+  echo "  ✓ All services healthy"
+fi
+
 echo ""
-echo "  App:      http://localhost:8000       (gateway + frontend in prod)"
+echo "  App:      http://localhost:8000       (gateway + frontend)"
 echo "  Frontend: http://localhost:5173       (hot-reload dev server)"
 echo "  OurCents: http://localhost:8001/docs"
 echo "  Nudge:    http://localhost:8002/docs"
 echo ""
-echo "Logs are in .logs/   (tail -f .logs/gateway.log  etc.)"
-echo "To stop:  ./stop.sh"
+echo "Logs: .logs/   (tail -f .logs/gateway.log)"
+echo "Stop: ./stop.sh"

@@ -55,11 +55,7 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
     if not settings.dispatch_enabled:
         return
 
-    text = msg.transcript or msg.body
-    if not text or not text.strip():
-        return
-
-    # Resolve contact early — needed for pending-session lookup
+    # Resolve contact early — needed for all paths
     conv = session.get(Conversation, msg.conversation_id)
     if conv is None:
         logger.error('Conversation %s not found', msg.conversation_id)
@@ -69,9 +65,13 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
         return
     phone = contact.phone_number
 
-    # ── Image message → receipt processing ────────────────────────
+    # ── Image message → receipt processing (no text required) ─────
     if msg.message_type == "image" and msg.media_url:
         _handle_image(session, conv, phone, msg, settings)
+        return
+
+    text = msg.transcript or msg.body
+    if not text or not text.strip():
         return
 
     # ── Cancel? ───────────────────────────────────────────────────
@@ -101,6 +101,10 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
     # ── Fresh request ─────────────────────────────────────────────
     result = detect_intent(text)
     if result is None:
+        _reply(session, conv, phone,
+               "Sorry, I didn't understand that. I can help with expenses, reminders, or your balance — "
+               "try saying something like \"Spent $20 on lunch\" or \"Remind me to call the doctor tomorrow\".",
+               settings)
         return
     _handle_fresh(session, conv, phone, msg, result, settings)
 
@@ -116,18 +120,32 @@ def _handle_image(
     msg: MessageRead,
     settings,
 ) -> None:
-    """Download a WhatsApp image and forward it to OurCents for receipt processing."""
+    """Read a locally-stored image and forward it to OurCents for receipt processing."""
     import base64
-    # Lazy import to avoid circular dependency (whatsapp_service imports dispatch_service)
-    from app.services.whatsapp_service import download_media_bytes
+    from app.services.media_service import get_media_path
+
+    # media_url is a local API path like /api/media/<filename>
+    filename = (msg.media_url or "").rsplit("/", 1)[-1]
+    path = get_media_path(filename) if filename else None
+    if not path or not path.exists():
+        logger.error('Image file not found for media_url=%s', msg.media_url)
+        _reply(session, conv, phone,
+               "I couldn't read the image. Please try again.", settings)
+        return
 
     try:
-        media = download_media_bytes(msg.media_url)
+        content = path.read_bytes()
     except Exception as exc:
-        logger.error('Image download failed for media_url=%s: %s', msg.media_url, exc)
+        logger.error('Image read failed for %s: %s', path, exc)
         _reply(session, conv, phone,
-               "I couldn't download the image. Please try again.", settings)
+               "I couldn't read the image. Please try again.", settings)
         return
+
+    media = {
+        'content': content,
+        'content_type': 'image/jpeg',
+        'filename': filename,
+    }
 
     service = _registry.find_service('process_receipt_image')
     if service is None:

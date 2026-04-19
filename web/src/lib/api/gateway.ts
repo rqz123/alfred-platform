@@ -39,7 +39,9 @@ export type Message = {
 };
 
 
-const API_BASE = `${window.location.protocol}//${window.location.hostname}:8000/api`;
+// Use relative path so requests go through the Vite proxy in dev and directly
+// to the same-origin gateway in production.
+const API_BASE = "/api";
 
 async function apiRequest<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
   const headers = new Headers(init?.headers ?? {});

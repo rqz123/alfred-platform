@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 
 const NAV_ITEMS = [
@@ -7,8 +8,12 @@ const NAV_ITEMS = [
     { label: "Upload Receipt", path: "/ourcents/upload" },
     { label: "Receipts", path: "/ourcents/receipts" },
   ]},
-  { label: "Nudge", icon: "🔔", path: "/nudge" },
+  { label: "Nudge", icon: "🔔", children: [
+    { label: "Dashboard", path: "/nudge/dashboard" },
+    { label: "Set Reminder", path: "/nudge/set-reminder" },
+  ]},
   { label: "Settings", icon: "⚙", path: "/settings" },
+  { label: "Logs", icon: "📋", path: "/logs", adminOnly: true },
 ];
 
 const activeLinkStyle = {
@@ -18,7 +23,10 @@ const activeLinkStyle = {
 };
 
 export default function Sidebar() {
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const navigate = useNavigate();
+  const isAdmin = !!localStorage.getItem("alfred_token");
+  const visibleItems = NAV_ITEMS.filter((item) => !("adminOnly" in item && item.adminOnly && !isAdmin));
   const username = (() => {
     try {
       const raw = localStorage.getItem("alfred_user") ?? localStorage.getItem("ourcents_user");
@@ -52,19 +60,23 @@ export default function Sidebar() {
       </div>
 
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {NAV_ITEMS.map((item) =>
+        {visibleItems.map((item) =>
           "children" in item ? (
             <div key={item.label}>
-              <div style={{ padding: "0.5rem 1.2rem", fontSize: "0.8rem", fontWeight: 600, color: "#64748b", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                {item.icon} {item.label}
+              <div
+                onClick={() => setExpanded((prev) => ({ ...prev, [item.label]: !prev[item.label] }))}
+                style={{ padding: "0.5rem 1.2rem", margin: "0 0.5rem", fontSize: "0.95rem", fontWeight: 400, color: "#475569", cursor: "pointer", userSelect: "none", display: "flex", justifyContent: "space-between", alignItems: "center", borderRadius: 4 }}
+              >
+                <span>{item.icon} {item.label}</span>
+                <span style={{ fontSize: "0.7rem", color: "#94a3b8" }}>{expanded[item.label] ? "▲" : "▼"}</span>
               </div>
-              {(item.children ?? []).map((child) => (
+              {expanded[item.label] && (item.children ?? []).map((child) => (
                 <NavLink
                   key={child.path}
                   to={child.path}
                   style={({ isActive }) => ({
                     display: "block",
-                    padding: "0.4rem 1.2rem 0.4rem 2rem",
+                    padding: "0.4rem 1rem 0.4rem 3rem",
                     textDecoration: "none",
                     color: "#475569",
                     fontSize: "0.9rem",

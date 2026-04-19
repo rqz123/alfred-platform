@@ -172,7 +172,15 @@ _SYSTEM_PROMPT = (
     "Extract entities when present:\n"
     "- amount: numeric value (e.g. 50.0)\n"
     "- date: 'today', 'yesterday', or 'tomorrow' if mentioned\n"
-    "- category: 'food', 'transport', 'shopping', or 'medical' for expense/income\n"
+    "- category: pick the best match from this list for expense/income/budget:\n"
+    "    'food' (restaurants, groceries, coffee, drinks, meals)\n"
+    "    'transportation' (taxi, gas, subway, bus, flight, parking)\n"
+    "    'shopping' (clothing, retail, online purchases, electronics, gifts)\n"
+    "    'healthcare' (hospital, pharmacy, doctor, medicine, dental)\n"
+    "    'entertainment' (movies, games, sports, concerts, subscriptions)\n"
+    "    'utilities' (electricity, water, internet, phone bill, rent)\n"
+    "    'other' (anything that does not fit the above)\n"
+    "  Use null only if no category can be inferred at all.\n"
     "- title: reminder content text for add_reminder\n"
     "Set confidence between 0 and 1. Use null for entities that are not present."
 )
@@ -246,6 +254,6 @@ def extract_entities(text: str, intent: str) -> dict:
 
     Used by the multi-turn follow-up path: when we already know the intent
     from a previous turn, we call this to pull entities from the user's
-    supplementary message (e.g. "50 yuan" after "花了钱" was already routed).
+    supplementary message (e.g. "50 yuan" after "spent money" was already routed).
     """
     return _extract_entities(text.lower(), intent)

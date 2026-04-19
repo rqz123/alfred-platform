@@ -48,6 +48,7 @@ from app.services.bridge_service import (
     send_image_via_bridge,
     send_text_via_bridge,
 )
+from app.services.dispatch_service import dispatch_message
 from app.services.whatsapp_service import send_text_message, send_voice_message
 from app.services.media_service import get_media_path, save_base64_media, save_uploaded_media
 
@@ -354,11 +355,23 @@ def receive_bridge_message(
     )
     connection = get_or_create_connection_by_session_id(session, payload.session_id)
     stored_media_url = payload.media_url
+    transcript = payload.transcript
     if stored_media_url and stored_media_url.startswith("data:"):
         mimetype = stored_media_url.split(";")[0].removeprefix("data:")
         data_b64 = stored_media_url.split(",", 1)[1]
         stored_media_url = save_base64_media(data_b64, mimetype)
-    create_inbound_message_for_contact(
+        # Run STT on inbound voice messages
+        if payload.message_type in ("ptt", "audio") and not transcript:
+            try:
+                import base64
+                from app.services.stt_service import transcribe_audio_bytes
+                audio_bytes = base64.b64decode(data_b64)
+                ext = stored_media_url.rsplit(".", 1)[-1] if stored_media_url else "ogg"
+                transcript = transcribe_audio_bytes(audio_bytes, f"voice.{ext}", mimetype)
+                logger.info("STT transcript for %s: %s", payload.sender_phone, transcript)
+            except Exception as exc:
+                logger.warning("STT failed for %s: %s", payload.sender_phone, exc)
+    stored = create_inbound_message_for_contact(
         session,
         phone_number=payload.sender_phone,
         display_name=payload.sender_name,
@@ -366,9 +379,11 @@ def receive_bridge_message(
         message_type=payload.message_type,
         body=payload.body,
         media_url=stored_media_url,
-        transcript=payload.transcript,
+        transcript=transcript,
         connection_id=connection.id,
     )
+    if stored:
+        dispatch_message(session, stored)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -467,12 +482,39 @@ def receive_service_push(
     contact = create_or_get_contact(session, phone, display_name=None)
     conv = get_or_create_conversation(session, contact)
 
-    if settings.whatsapp_mode == "bridge" and conv.connection_id:
-        conn_record = session.get(WhatsAppConnection, conv.connection_id)
+    if settings.whatsapp_mode == "bridge":
+        # Prefer the conversation's linked connection; fall back to any active bridge session
+        conn_record = session.get(WhatsAppConnection, conv.connection_id) if conv.connection_id else None
+        if conn_record is None:
+            live = {s["id"]: s for s in list_bridge_sessions()}
+            conn_record = next(
+                (session.get(WhatsAppConnection, c.id)
+                 for c in list_connections(session)
+                 if live.get(c.bridge_session_id, {}).get("status") == "connected"),
+                None,
+            )
         if conn_record:
             send_text_via_bridge(conn_record.bridge_session_id, contact.phone_number, body)
+        else:
+            logger.warning("Bridge push skipped — no active bridge connection found")
     else:
         from app.services.dispatch_service import _send_cloud_reply
         _send_cloud_reply(contact.phone_number, body, settings)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+# ── Log viewer (admin only) ───────────────────────────────────────────────────
+
+_LOG_DIR = Path(__file__).resolve().parents[4] / ".logs"
+_ALLOWED_SERVICES = {"gateway", "ourcents", "nudge", "bridge", "frontend"}
+
+@auth_router.get("/logs/{service}", dependencies=[Depends(get_current_admin)])
+def get_logs(service: str, lines: int = 300):
+    if service not in _ALLOWED_SERVICES:
+        raise HTTPException(status_code=404, detail="Unknown service")
+    log_file = _LOG_DIR / f"{service}.log"
+    if not log_file.exists():
+        return {"service": service, "lines": []}
+    text = log_file.read_text(errors="replace")
+    all_lines = text.splitlines()
+    return {"service": service, "lines": all_lines[-lines:]}

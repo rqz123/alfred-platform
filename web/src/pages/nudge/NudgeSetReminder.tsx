@@ -1,20 +1,16 @@
-/**
- * Nudge page — contains all state logic from the original Nudge App.tsx.
- */
-
-import { useEffect, useReducer } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { NudgeInput } from "./NudgeInput";
 import { ParsePreview } from "./ParsePreview";
-import { ReminderList } from "./ReminderList";
-import { listReminders, parseReminder, saveReminder } from "../../lib/api/nudge";
+import { parseReminder, saveReminder } from "../../lib/api/nudge";
+import { listPhoneBindings } from "../../lib/api/ourcents";
 import type { ParseResponse, Reminder, ReminderCreate } from "../../lib/types/nudge";
 
-type Phase = "idle" | "parsing" | "confirming" | "saving" | "error";
+type Phase = "idle" | "parsing" | "confirming" | "saving" | "done" | "error";
 
 interface State {
   phase: Phase;
   parseResult: ParseResponse | null;
-  reminders: Reminder[];
+  lastSaved: Reminder | null;
   error: string | null;
 }
 
@@ -24,8 +20,7 @@ type Action =
   | { type: "PARSE_ERROR"; payload: string }
   | { type: "CANCEL" }
   | { type: "SAVE_START" }
-  | { type: "SAVE_SUCCESS"; payload: Reminder }
-  | { type: "LOAD_REMINDERS"; payload: Reminder[] };
+  | { type: "SAVE_SUCCESS"; payload: Reminder };
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
@@ -34,19 +29,19 @@ function reducer(state: State, action: Action): State {
     case "PARSE_ERROR": return { ...state, phase: "error", error: action.payload };
     case "CANCEL": return { ...state, phase: "idle", parseResult: null, error: null };
     case "SAVE_START": return { ...state, phase: "saving" };
-    case "SAVE_SUCCESS": return { ...state, phase: "idle", parseResult: null, reminders: [action.payload, ...state.reminders] };
-    case "LOAD_REMINDERS": return { ...state, reminders: action.payload };
+    case "SAVE_SUCCESS": return { ...state, phase: "done", parseResult: null, lastSaved: action.payload };
     default: return state;
   }
 }
 
-export default function NudgePage() {
-  const [state, dispatch] = useReducer(reducer, { phase: "idle", parseResult: null, reminders: [], error: null });
+export default function NudgeSetReminder() {
+  const [state, dispatch] = useReducer(reducer, { phase: "idle", parseResult: null, lastSaved: null, error: null });
+  const [boundPhone, setBoundPhone] = useState<string | null>(null);
 
   useEffect(() => {
-    listReminders()
-      .then((data) => dispatch({ type: "LOAD_REMINDERS", payload: data }))
-      .catch(() => {/* silently ignore — token may not be set yet */});
+    listPhoneBindings()
+      .then((bindings) => { if (bindings.length > 0) setBoundPhone(bindings[0].phone); })
+      .catch(() => {});
   }, []);
 
   async function handleParse(input: string, timezone: string) {
@@ -60,7 +55,8 @@ export default function NudgePage() {
   async function handleSave(data: ReminderCreate) {
     dispatch({ type: "SAVE_START" });
     try {
-      const saved = await saveReminder(data);
+      const payload = boundPhone ? { ...data, triggerSource: boundPhone } : data;
+      const saved = await saveReminder(payload);
       dispatch({ type: "SAVE_SUCCESS", payload: saved });
     } catch (e) { dispatch({ type: "PARSE_ERROR", payload: String(e) }); }
   }
@@ -69,8 +65,11 @@ export default function NudgePage() {
     <div style={{ padding: "1.5rem" }}>
       <div style={{ maxWidth: 560, display: "flex", flexDirection: "column", gap: 20 }}>
         <div>
-          <h2 style={{ margin: 0 }}>Nudge</h2>
-          <p style={{ margin: "4px 0 0", color: "#6b7280", fontSize: 14 }}>Create reminders in natural language</p>
+          <h2 style={{ margin: 0 }}>Set Reminder</h2>
+          <p style={{ margin: "4px 0 0", color: "#6b7280", fontSize: 14 }}>
+            Create a reminder in natural language
+            {boundPhone && <span style={{ marginLeft: 8, color: "#6366f1" }}>· alerts → {boundPhone}</span>}
+          </p>
         </div>
 
         <NudgeInput onParse={handleParse} loading={state.phase === "parsing"} />
@@ -91,10 +90,12 @@ export default function NudgePage() {
           />
         )}
 
-        <div>
-          <h3 style={{ margin: "0 0 10px", fontSize: 16, fontWeight: 600, color: "#374151" }}>My Reminders</h3>
-          <ReminderList reminders={state.reminders} />
-        </div>
+        {state.phase === "done" && state.lastSaved && (
+          <div style={{ background: "#f0fdf4", border: "1px solid #86efac", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#166534", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <span>Reminder "{state.lastSaved.title}" saved!</span>
+            <button onClick={() => dispatch({ type: "CANCEL" })} style={{ background: "none", border: "none", cursor: "pointer", fontSize: 18, color: "#166534" }}>×</button>
+          </div>
+        )}
       </div>
     </div>
   );

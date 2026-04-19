@@ -94,7 +94,7 @@ async def list_reminders(
 # ASI (Alfred Service Interface) endpoints
 # ─────────────────────────────────────────────────────
 
-_ALFRED_API_KEY = os.environ.get("ALFRED_API_KEY", "")
+_ALFRED_API_KEY = os.environ.get("NUDGE_API_KEY", "") or os.environ.get("ALFRED_API_KEY", "")
 
 
 def _verify_alfred_key(x_alfred_api_key: str | None = Header(default=None)) -> None:
@@ -183,7 +183,6 @@ async def alfred_execute(req: AlfredExecuteRequest):
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
                 message="You have no pending reminders.",
-                quick_replies=["Add reminder"],
             )
         lines = []
         for r in rows:
@@ -192,7 +191,6 @@ async def alfred_execute(req: AlfredExecuteRequest):
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message="Your reminders:\n" + "\n".join(lines),
-            quick_replies=["Add reminder"],
         )
 
     if req.intent == "get_schedule":
@@ -215,7 +213,6 @@ async def alfred_execute(req: AlfredExecuteRequest):
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
                 message=f"No reminders scheduled for {label.lower()} ({target_date}).",
-                quick_replies=["Add reminder", "View all reminders"],
             )
         lines = [
             f"- {r['title']} @ {_fmt_utc_time(r['nextFireAt'])}"
@@ -224,7 +221,6 @@ async def alfred_execute(req: AlfredExecuteRequest):
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message=f"{label}'s schedule ({target_date}):\n" + "\n".join(lines),
-            quick_replies=["Add reminder", "View all reminders"],
         )
 
     if req.intent == "add_reminder":
@@ -276,7 +272,6 @@ async def alfred_execute(req: AlfredExecuteRequest):
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message=f"Reminder set: {row['title']}\nAt: {fire_display}",
-            quick_replies=["View my reminders"],
         )
 
     return AlfredExecuteResponse(

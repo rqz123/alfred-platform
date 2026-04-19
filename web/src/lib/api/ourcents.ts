@@ -27,6 +27,20 @@ export interface LoginResponse {
   is_admin: boolean;
 }
 
+export async function register(familyName: string, username: string, password: string): Promise<void> {
+  await fetch(`${OURCENTS_BASE}/api/ourcents/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      family_name: familyName,
+      admin_username: username,
+      admin_email: `${username}@alfred.local`,
+      admin_password: password,
+    }),
+  });
+  // ignore errors (e.g. already registered)
+}
+
 export async function login(username: string, password: string): Promise<LoginResponse> {
   const data = await request<LoginResponse>("/api/ourcents/auth/login", {
     method: "POST",

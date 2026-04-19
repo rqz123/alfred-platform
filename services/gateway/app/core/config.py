@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     whatsapp_phone_number_id: str = ""
     whatsapp_app_secret: str = ""
     stt_provider: str = "mock"
+    openai_api_key: str = ""          # shared fallback (OPENAI_API_KEY)
     stt_openai_api_key: str = ""
     stt_openai_model: str = "gpt-4o-mini-transcribe"
     tts_provider: str = "disabled"

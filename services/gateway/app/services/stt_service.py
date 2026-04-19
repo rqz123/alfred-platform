@@ -18,7 +18,8 @@ def transcribe_audio_bytes(audio_bytes: bytes, filename: str, content_type: str)
         return f"Mock transcript generated for {filename}."
 
     if provider == "openai":
-        if not settings.stt_openai_api_key:
+        api_key = settings.stt_openai_api_key or settings.openai_api_key
+        if not api_key:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail="OpenAI STT is not configured",
@@ -31,7 +32,7 @@ def transcribe_audio_bytes(audio_bytes: bytes, filename: str, content_type: str)
             "model": settings.stt_openai_model,
         }
         headers = {
-            "Authorization": f"Bearer {settings.stt_openai_api_key}",
+            "Authorization": f"Bearer {api_key}",
         }
 
         try:

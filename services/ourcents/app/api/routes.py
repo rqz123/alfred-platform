@@ -11,6 +11,8 @@ import os
 import sys
 import uuid as _uuid
 
+import httpx
+
 logger = logging.getLogger("ourcents.routes")
 from datetime import date, datetime, timedelta
 from typing import Any, List, Optional
@@ -185,8 +187,8 @@ def list_receipts(
         params.append(category)
 
     if status_filter == "pending":
-        query += " AND r.status IN (?, ?)"
-        params.extend(["pending_confirmation", "duplicate_suspected"])
+        query += " AND r.status IN (?, ?, ?)"
+        params.extend(["pending", "pending_confirmation", "duplicate_suspected"])
     elif status_filter:
         query += " AND r.status = ?"
         params.append(status_filter)
@@ -215,6 +217,33 @@ def get_receipt(
     if details is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receipt not found")
     return details
+
+
+@router.get("/receipts/{receipt_id}/image")
+def get_receipt_image(
+    receipt_id: int,
+    payload: TokenPayload = Depends(verify_token),
+    db=Depends(get_db),
+    file_storage=Depends(get_file_storage),
+):
+    from fastapi.responses import Response as FastResponse
+    family_id = payload.family_id
+    if family_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No family context in token")
+    with db.get_connection() as conn:
+        row = conn.execute(
+            """SELECT uf.storage_path, uf.mime_type
+               FROM receipts r JOIN upload_files uf ON uf.id = r.upload_file_id
+               WHERE r.id = ? AND r.family_id = ?""",
+            (receipt_id, family_id),
+        ).fetchone()
+    if not row or not row["storage_path"]:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Image not found")
+    data = file_storage.get_file(row["storage_path"])
+    if data is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Image file missing")
+    mime = row["mime_type"] or "image/jpeg"
+    return FastResponse(content=data, media_type=mime)
 
 
 @router.post("/receipts/upload")
@@ -371,6 +400,31 @@ def bind_phone(
             (normalized, user_id, family_id),
         )
 
+    # Send a welcome message via Gateway (best-effort, don't fail the bind if push fails)
+    _send_welcome(normalized)
+
+
+def _send_welcome(phone: str) -> None:
+    gateway_url = os.environ.get("GATEWAY_URL", "http://localhost:8000")
+    api_key = os.environ.get("OURCENTS_API_KEY", "")
+    welcome = (
+        "👋 Welcome to Alfred! Your WhatsApp number is now linked.\n\n"
+        "You can send me messages like:\n"
+        "• \"Spent $12 on lunch\"\n"
+        "• \"Income $500 freelance\"\n"
+        "• \"What's my balance?\"\n"
+        "• \"Remind me to pay rent on the 1st\""
+    )
+    try:
+        with httpx.Client(timeout=8.0) as client:
+            client.post(
+                f"{gateway_url}/api/internal/push",
+                json={"user_phone": phone, "message": welcome, "source_service": "ourcents"},
+                headers={"X-Alfred-API-Key": api_key},
+            )
+    except Exception as exc:
+        logger.warning("Welcome push failed for %s: %s", phone, exc)
+
 
 @router.delete("/phone/bindings/{phone}", status_code=status.HTTP_204_NO_CONTENT)
 def unbind_phone(
@@ -396,7 +450,7 @@ def unbind_phone(
 # ASI (Alfred Service Interface) endpoints
 # ─────────────────────────────────────────────────────
 
-ALFRED_API_KEY = os.environ.get("ALFRED_API_KEY", "")
+ALFRED_API_KEY = os.environ.get("OURCENTS_API_KEY", "") or os.environ.get("ALFRED_API_KEY", "")
 
 
 def _verify_alfred_key(x_alfred_api_key: str | None = Header(default=None)) -> None:
@@ -531,7 +585,6 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
                 msg += "\nBudget:\n" + "\n".join(budget_lines)
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success", message=msg,
-                quick_replies=["Monthly report", "Add expense", "Add income"],
             )
         except Exception:
             return AlfredExecuteResponse(
@@ -563,7 +616,6 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
             )
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success", message=msg,
-                quick_replies=["View breakdown", "Add expense", "Add income"],
             )
         except Exception:
             return AlfredExecuteResponse(
@@ -582,8 +634,13 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
 
         user_id = row["user_id"]
         _category_map = {
-            "food": "food", "transport": "transportation",
-            "medical": "healthcare", "shopping": "other",
+            "food": "food",
+            "transportation": "transportation", "transport": "transportation",
+            "healthcare": "healthcare", "medical": "healthcare",
+            "shopping": "shopping",
+            "entertainment": "entertainment",
+            "utilities": "utilities",
+            "other": "other",
         }
         category_val = _category_map.get(req.entities.get("category", ""), "other")
         _date_kw = req.entities.get("date", "today")
@@ -611,7 +668,7 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
                     "    (family_id, user_id, upload_file_id, merchant_name, merchant_normalized, "
                     "     purchase_date, total_amount, currency, category, status, confidence_score) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (family_id, user_id, upload_id, "WhatsApp quick expense", "whatsapp_expense",
+                    (family_id, user_id, upload_id, f"WA +{normalized}", "whatsapp_expense",
                      purchase_date, float(amount), "CNY", category_val, "confirmed", 1.0),
                 )
                 receipt_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -625,12 +682,11 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
                     "INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) "
                     "VALUES (?, ?, ?, ?, ?)",
                     (user_id, "create", "receipt", receipt_id,
-                     f"WhatsApp quick expense: ¥{amount:.2f}"),
+                     f"WA +{normalized}: {amount:.2f}"),
                 )
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
                 message=f"Expense recorded: ¥{float(amount):.2f} ({purchase_date}, {category_val})",
-                quick_replies=["This month", "Upload receipt"],
             )
         except Exception:
             return AlfredExecuteResponse(
@@ -684,7 +740,6 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
                 message=f"Income recorded: ¥{float(amount):.2f} ({income_date}, {income_category})",
-                quick_replies=["Check balance", "This month"],
             )
         except Exception:
             return AlfredExecuteResponse(
@@ -714,7 +769,6 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
                 message=f"Budget set: {category} ¥{float(amount):.2f}/month",
-                quick_replies=["Check balance", "Monthly report"],
             )
         except Exception:
             return AlfredExecuteResponse(
@@ -762,13 +816,13 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
                 message="This receipt looks like a duplicate — it may already be recorded.",
-                quick_replies=["View receipts", "Check balance"],
             )
 
         # Build a human-readable confirmation from the extracted data
-        merchant = extra.get("merchant_name", "Unknown merchant") if extra else "Unknown merchant"
-        amount = extra.get("total_amount") if extra else None
-        category = extra.get("category", "") if extra else ""
+        extraction = (extra or {}).get("extraction") or {}
+        merchant = extraction.get("merchant_name") or extraction.get("merchant_normalized") or "Unknown merchant"
+        amount = extraction.get("total_amount")
+        category = extraction.get("category", "")
         if amount:
             msg_text = f"Receipt recorded: {merchant} ¥{float(amount):.2f}"
             if category:
@@ -779,7 +833,6 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message=msg_text,
-            quick_replies=["Check balance", "Monthly report", "View receipts"],
         )
 
     return AlfredExecuteResponse(

@@ -71,7 +71,9 @@ async function downloadMediaDataUrl(message) {
   if (!message.hasMedia) return null;
   try {
     const media = await message.downloadMedia();
-    if (!media || !media.mimetype.startsWith("image/")) return null;
+    if (!media) return null;
+    const mt = media.mimetype || "";
+    if (!mt.startsWith("image/") && !mt.startsWith("audio/")) return null;
     return `data:${media.mimetype};base64,${media.data}`;
   } catch (err) {
     log("warn", "Media download failed", { error: String(err) });
