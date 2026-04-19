@@ -74,15 +74,13 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
     if not text or not text.strip():
         return
 
-    # ── Cancel? ───────────────────────────────────────────────────
-    if is_cancel(text):
-        pending = get_pending(phone)
-        if pending:
-            clear_pending(phone)
-            _reply(session, conv, phone, 'Cancelled. Anything else I can help with?', settings)
-        return
-
     pending = get_pending(phone)
+
+    # ── Cancel? (only when a pending session exists) ───────────────
+    if is_cancel(text) and pending:
+        clear_pending(phone)
+        _reply(session, conv, phone, 'Cancelled. Anything else I can help with?', settings)
+        return
 
     # ── Follow-up message (pending session exists) ─────────────────
     if pending:
@@ -185,7 +183,10 @@ def _handle_fresh(
 
     service = _registry.find_service(intent)
     if service is None:
-        logger.debug('No service for intent %s', intent)
+        logger.warning('No service registered for intent %s', intent)
+        _reply(session, conv, phone,
+               "I understood your request but that feature isn't available right now. Please try again later.",
+               settings)
         return
 
     resp = _call_service(service, phone, msg.conversation_id, intent, entities)

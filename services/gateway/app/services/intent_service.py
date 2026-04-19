@@ -51,6 +51,10 @@ KEYWORD_MAP = [
     # get_balance: balance/remaining/account/surplus/how-much
     (['\u4f59\u989d', '\u8fd8\u5269', '\u8d26\u6237', '\u7ed3\u4f59', '\u591a\u5c11\u94b1'],
      'get_balance'),
+    # cancel_reminder: cancel/delete/remove + reminder keyword
+    (['\u53d6\u6d88\u63d0\u9192', '\u5220\u9664\u63d0\u9192', 'cancel reminder', 'delete reminder',
+      'remove reminder', 'cancel alarm'],
+     'cancel_reminder'),
     # add_reminder: remind/hint/remind/don't-forget/remember/todo + english 'remind'
     (['\u63d0\u9192', '\u63d0\u793a', 'remind', '\u522b\u5fd8\u4e86', '\u8bb0\u5f97', '\u5f85\u529e'],
      'add_reminder'),
@@ -62,6 +66,7 @@ KEYWORD_MAP = [
 VALID_INTENTS = {
     'add_expense', 'add_income', 'get_balance', 'monthly_report',
     'set_budget', 'add_reminder', 'list_reminders', 'get_schedule',
+    'cancel_reminder',
 }
 
 
@@ -136,7 +141,8 @@ _INTENT_SCHEMA = {
                 "type": "string",
                 "enum": [
                     "add_expense", "add_income", "get_balance", "monthly_report",
-                    "set_budget", "add_reminder", "list_reminders", "get_schedule", "none",
+                    "set_budget", "add_reminder", "list_reminders", "get_schedule",
+                    "cancel_reminder", "none",
                 ],
             },
             "confidence": {"type": "number"},
@@ -168,6 +174,7 @@ _SYSTEM_PROMPT = (
     "- add_reminder: user wants to set a reminder or to-do\n"
     "- list_reminders: user wants to see their active reminders\n"
     "- get_schedule: user asks about today's schedule or calendar\n"
+    "- cancel_reminder: user wants to cancel, delete, or remove a reminder (by number or name)\n"
     "- none: message does not match any of the above\n\n"
     "Extract entities when present:\n"
     "- amount: numeric value (e.g. 50.0)\n"
@@ -181,7 +188,7 @@ _SYSTEM_PROMPT = (
     "    'utilities' (electricity, water, internet, phone bill, rent)\n"
     "    'other' (anything that does not fit the above)\n"
     "  Use null only if no category can be inferred at all.\n"
-    "- title: reminder content text for add_reminder\n"
+    "- title: reminder content text for add_reminder; or the reference (number or name) for cancel_reminder — put it in title\n"
     "Set confidence between 0 and 1. Use null for entities that are not present."
 )
 

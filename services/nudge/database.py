@@ -25,6 +25,7 @@ reminders = Table(
     Column("timezone", String, nullable=False),
     Column("triggerSource", String, nullable=True),
     Column("triggerCondition", JSON, nullable=True),
+    Column("shortName", String, nullable=True),
     Column("status", String, nullable=False, default="active"),
     Column("lastFiredAt", String, nullable=True),
     Column("nextFireAt", String, nullable=True),
@@ -43,6 +44,9 @@ def create_tables():
             cols = [row[1] for row in conn.execute(text("PRAGMA table_info(reminders)"))]
             if "pushRetries" not in cols:
                 conn.execute(text('ALTER TABLE reminders ADD COLUMN "pushRetries" VARCHAR DEFAULT "0"'))
+                conn.commit()
+            if "shortName" not in cols:
+                conn.execute(text('ALTER TABLE reminders ADD COLUMN "shortName" VARCHAR'))
                 conn.commit()
         except Exception:
             pass

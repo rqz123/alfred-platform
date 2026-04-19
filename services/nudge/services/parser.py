@@ -44,7 +44,9 @@ def compute_next_fire(cron_expr: str, tz_name: str) -> str | None:
         tz = pytz.timezone(tz_name)
         now = datetime.now(tz)
         it = croniter(cron_expr, now)
-        return it.get_next(datetime).isoformat()
+        next_dt = it.get_next(datetime)
+        # Always store in UTC so SQLite string comparison works correctly
+        return next_dt.astimezone(timezone.utc).isoformat()
     except Exception:
         return None
 

@@ -14,11 +14,9 @@ from routers.nudge import router as nudge_router
 
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173")
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://localhost:8000")
-NUDGE_API_KEY = os.environ.get("ALFRED_API_KEY", "")
+NUDGE_API_KEY = os.environ.get("NUDGE_API_KEY", "") or os.environ.get("ALFRED_API_KEY", "")
 
 logger = logging.getLogger("nudge.firing")
-
-FIRE_INTERVAL = int(os.environ.get("NUDGE_FIRE_INTERVAL_SECONDS", "60"))
 
 
 PUSH_MAX_RETRIES = 3
@@ -32,12 +30,25 @@ async def _fire_due_reminders() -> None:
     now = now_dt.isoformat()
     try:
         with engine.connect() as conn:
-            due = conn.execute(
-                select(reminders).where(
-                    reminders.c.status == "active",
-                    reminders.c.nextFireAt <= now,
-                )
+            all_active = conn.execute(
+                select(reminders).where(reminders.c.status == "active")
             ).mappings().all()
+
+        # Compare in Python to handle nextFireAt values with non-UTC offsets.
+        # SQLite string comparison of "+08:00" vs "+00:00" timestamps is unreliable.
+        due = []
+        for r in all_active:
+            nf = r.get("nextFireAt")
+            if not nf:
+                continue
+            try:
+                nf_dt = datetime.fromisoformat(nf)
+                if nf_dt.tzinfo is None:
+                    nf_dt = nf_dt.replace(tzinfo=timezone.utc)
+                if nf_dt <= now_dt:
+                    due.append(r)
+            except Exception:
+                pass
 
         if not due:
             return
@@ -61,11 +72,13 @@ async def _fire_due_reminders() -> None:
             if phone:
                 try:
                     async with httpx.AsyncClient(timeout=10.0) as client:
+                        short_name = r.get("shortName")
+                        label = f"\U0001f43e {short_name} — " if short_name else ""
                         await client.post(
                             f"{GATEWAY_URL}/api/internal/push",
                             json={
                                 "user_phone": phone,
-                                "message": f"Reminder: {body_text}",
+                                "message": f"{label}{body_text}",
                                 "source_service": "nudge",
                                 "quick_replies": ["View my reminders"],
                             },
@@ -132,9 +145,14 @@ async def _fire_due_reminders() -> None:
 
 
 async def _reminder_loop() -> None:
-    """Background loop that fires due reminders every FIRE_INTERVAL seconds."""
+    """Background loop that fires due reminders, aligned to minute boundaries."""
+    # Fire once immediately on startup to catch anything missed while down
+    await _fire_due_reminders()
     while True:
-        await asyncio.sleep(FIRE_INTERVAL)
+        # Sleep until the next whole minute so reminders fire at :00, not mid-minute
+        now = datetime.now(timezone.utc)
+        seconds_to_next_minute = 60 - now.second - now.microsecond / 1_000_000
+        await asyncio.sleep(seconds_to_next_minute)
         await _fire_due_reminders()
 
 
@@ -142,7 +160,7 @@ async def _reminder_loop() -> None:
 async def lifespan(_app: FastAPI):
     create_tables()
     task = asyncio.create_task(_reminder_loop())
-    logger.info("Reminder firing loop started (interval=%ds)", FIRE_INTERVAL)
+    logger.info("Reminder firing loop started (minute-aligned)")
     yield
     task.cancel()
     try:

@@ -2,8 +2,19 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { listReminders } from "../../lib/api/nudge";
 import { listPhoneBindings } from "../../lib/api/ourcents";
-import { ReminderList } from "./ReminderList";
+import { ReminderSection } from "./ReminderList";
 import type { Reminder } from "../../lib/types/nudge";
+
+const TZ = "America/Los_Angeles";
+
+function todayStrPDT(): string {
+  return new Date().toLocaleDateString("en-CA", { timeZone: TZ }); // "YYYY-MM-DD"
+}
+
+function firedTodayPDT(r: Reminder): boolean {
+  if (!r.lastFiredAt) return false;
+  return new Date(r.lastFiredAt).toLocaleDateString("en-CA", { timeZone: TZ }) === todayStrPDT();
+}
 
 export default function NudgeDashboard() {
   const [reminders, setReminders] = useState<Reminder[]>([]);
@@ -11,29 +22,38 @@ export default function NudgeDashboard() {
   const [hasPhone, setHasPhone] = useState<boolean | null>(null);
   const navigate = useNavigate();
 
-  useEffect(() => {
+  function loadReminders() {
     listReminders()
       .then(setReminders)
       .catch(() => {})
       .finally(() => setLoading(false));
+  }
+
+  useEffect(() => {
+    loadReminders();
     listPhoneBindings()
       .then((b) => setHasPhone(b.length > 0))
       .catch(() => setHasPhone(null));
   }, []);
 
-  const active = reminders.filter((r) => r.status === "active").length;
-  const fired = reminders.filter((r) => r.status === "done").length;
-  const paused = reminders.filter((r) => r.status === "paused").length;
+  // Section 1: active + paused
+  const activeReminders = reminders.filter(
+    (r) => r.status === "active" || r.status === "paused"
+  );
 
-  const now = new Date();
-  const todayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59);
-  const upcomingToday = reminders.filter((r) => {
-    if (r.status !== "active") return false;
-    const fire = r.nextFireAt ?? r.fireAt;
-    if (!fire) return false;
-    const d = new Date(fire);
-    return d >= now && d <= todayEnd;
-  }).length;
+  // Section 2: fired today (done, lastFiredAt is today in PDT)
+  const firedToday = reminders
+    .filter((r) => (r.status === "done" || r.status === "expired") && firedTodayPDT(r))
+    .sort((a, b) => new Date(b.lastFiredAt!).getTime() - new Date(a.lastFiredAt!).getTime());
+
+  // Section 3: past (done/expired but not today)
+  const past = reminders
+    .filter((r) => (r.status === "done" || r.status === "expired") && !firedTodayPDT(r))
+    .sort((a, b) => {
+      const at = a.lastFiredAt ? new Date(a.lastFiredAt).getTime() : 0;
+      const bt = b.lastFiredAt ? new Date(b.lastFiredAt).getTime() : 0;
+      return bt - at;
+    });
 
   return (
     <div style={{ padding: "1.5rem" }}>
@@ -44,7 +64,11 @@ export default function NudgeDashboard() {
         </div>
 
         {hasPhone === false && (
-          <div style={{ background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8, padding: "10px 14px", fontSize: 13, color: "#92400e", marginBottom: "1rem", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{
+            background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8,
+            padding: "10px 14px", fontSize: 13, color: "#92400e", marginBottom: "1.5rem",
+            display: "flex", justifyContent: "space-between", alignItems: "center",
+          }}>
             <span>⚠ No phone number linked — reminders will fire but alerts won't be sent.</span>
             <button
               onClick={() => navigate("/settings")}
@@ -55,28 +79,32 @@ export default function NudgeDashboard() {
           </div>
         )}
 
-        <div style={{ display: "flex", gap: "1rem", marginBottom: "2rem", flexWrap: "wrap" }}>
-          <StatCard label="Active" value={String(active)} color="#16a34a" />
-          <StatCard label="Firing Today" value={String(upcomingToday)} color="#6366f1" />
-          <StatCard label="Fired" value={String(fired)} color="#6b7280" />
-          <StatCard label="Paused" value={String(paused)} color="#d97706" />
-        </div>
-
         {loading ? (
           <p style={{ color: "#9ca3af", fontSize: 14 }}>Loading…</p>
         ) : (
-          <ReminderList reminders={reminders} />
+          <>
+            <ReminderSection
+              title="Active"
+              reminders={activeReminders}
+              onRefresh={loadReminders}
+              variant="active"
+              emptyText="No active reminders."
+            />
+            <ReminderSection
+              title="Fired Today"
+              reminders={firedToday}
+              variant="fired"
+              emptyText="Nothing fired today yet."
+            />
+            <ReminderSection
+              title="Past"
+              reminders={past}
+              variant="fired"
+              emptyText="No past reminders."
+            />
+          </>
         )}
       </div>
-    </div>
-  );
-}
-
-function StatCard({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <div style={{ padding: "1rem 1.5rem", background: "#f8f9fa", borderRadius: 8, border: "1px solid #e2e8f0", minWidth: 120 }}>
-      <div style={{ fontSize: "0.85rem", color: "#64748b" }}>{label}</div>
-      <div style={{ fontSize: "1.5rem", fontWeight: 700, color }}>{value}</div>
     </div>
   );
 }

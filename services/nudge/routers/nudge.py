@@ -4,6 +4,8 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
 
+import pytz
+
 # Add monorepo root to path for local dev so `shared` package is importable
 # In Docker, shared is installed as a package so this is a no-op
 _monorepo_root = os.path.join(os.path.dirname(__file__), "..", "..", "..")
@@ -12,15 +14,29 @@ if _monorepo_root not in sys.path:
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, insert
+from sqlalchemy import select, insert, update, delete
 
 from shared.auth import make_verify_token, TokenPayload
 from database import engine, reminders
-from models import ParseRequest, ParseResponse, ParsedReminder, ReminderCreate, ReminderOut
+from models import ParseRequest, ParseResponse, ParsedReminder, ReminderCreate, ReminderOut, ReminderUpdate
 from services.parser import parse_reminder, compute_next_fire
 
 router = APIRouter()
 verify_token = make_verify_token("/api/auth/login")
+
+
+def _to_utc_iso(dt_str: str | None, tz_name: str = "UTC") -> str | None:
+    """Normalize a possibly-local ISO datetime string to UTC for consistent storage."""
+    if not dt_str:
+        return None
+    try:
+        dt = datetime.fromisoformat(dt_str)
+        if dt.tzinfo is None:
+            tz = pytz.timezone(tz_name)
+            dt = tz.localize(dt)
+        return dt.astimezone(timezone.utc).isoformat()
+    except Exception:
+        return dt_str
 
 
 @router.post("/parse", response_model=ParseResponse)
@@ -46,18 +62,21 @@ async def create_reminder(data: ReminderCreate, _: TokenPayload = Depends(verify
     if data.cronExpression:
         next_fire = compute_next_fire(data.cronExpression, data.timezone)
     elif data.fireAt:
-        next_fire = data.fireAt
+        next_fire = _to_utc_iso(data.fireAt, data.timezone)
+
+    short_name = _assign_pet_name(_taken_names(data.triggerSource))
 
     row = {
         "id": reminder_id,
         "title": data.title,
         "body": data.body,
         "type": data.type,
-        "fireAt": data.fireAt,
+        "fireAt": _to_utc_iso(data.fireAt, data.timezone),
         "cronExpression": data.cronExpression,
         "timezone": data.timezone,
         "triggerSource": data.triggerSource,
         "triggerCondition": data.triggerCondition,
+        "shortName": short_name,
         "status": "active",
         "lastFiredAt": None,
         "nextFireAt": next_fire,
@@ -90,11 +109,85 @@ async def list_reminders(
     return result
 
 
+@router.patch("/reminders/{reminder_id}", response_model=ReminderOut)
+async def update_reminder(
+    reminder_id: str,
+    data: ReminderUpdate,
+    _: TokenPayload = Depends(verify_token),
+):
+    now = datetime.now(timezone.utc).isoformat()
+    with engine.connect() as conn:
+        row = conn.execute(select(reminders).where(reminders.c.id == reminder_id)).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Reminder not found")
+        conn.execute(
+            update(reminders)
+            .where(reminders.c.id == reminder_id)
+            .values(status=data.status, updatedAt=now)
+        )
+        conn.commit()
+        updated = conn.execute(select(reminders).where(reminders.c.id == reminder_id)).mappings().first()
+    return ReminderOut(**dict(updated))
+
+
+@router.delete("/reminders/{reminder_id}", status_code=204)
+async def delete_reminder(
+    reminder_id: str,
+    _: TokenPayload = Depends(verify_token),
+):
+    with engine.connect() as conn:
+        row = conn.execute(select(reminders).where(reminders.c.id == reminder_id)).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Reminder not found")
+        conn.execute(delete(reminders).where(reminders.c.id == reminder_id))
+        conn.commit()
+
+
 # ─────────────────────────────────────────────────────
 # ASI (Alfred Service Interface) endpoints
 # ─────────────────────────────────────────────────────
 
 _ALFRED_API_KEY = os.environ.get("NUDGE_API_KEY", "") or os.environ.get("ALFRED_API_KEY", "")
+_DEFAULT_TZ = os.environ.get("NUDGE_DEFAULT_TIMEZONE", "America/Los_Angeles")
+
+# Cute pet names assigned to reminders so users can reference them easily.
+# Names are unique per-user across active+paused reminders.
+_PET_NAMES = [
+    "Biscuit", "Mochi", "Coco", "Luna", "Bella", "Daisy", "Poppy", "Waffles",
+    "Peanut", "Nugget", "Pudding", "Snickers", "Toffee", "Maple", "Pretzel",
+    "Cocoa", "Noodle", "Dumpling", "Boba", "Latte", "Chai", "Oreo", "Pickles",
+    "Sushi", "Tofu", "Miso", "Ramen", "Ginger", "Pepper", "Cheddar", "Nacho",
+    "Churro", "Brownie", "Caramel", "Truffle", "Marshmallow", "Butterscotch",
+    "Fudge", "Jellybean", "Sprinkles", "Cupcake", "Cookie", "Muffin", "Wafer",
+    "Taffy", "Gumdrop", "Pumpkin", "Cobbler", "Doughnut", "Éclair",
+]
+
+
+def _assign_pet_name(exclude: set[str]) -> str:
+    """Pick a pet name not already in use. Falls back to Name+N if all taken."""
+    import random
+    available = [n for n in _PET_NAMES if n not in exclude]
+    if available:
+        return random.choice(available)
+    # All 50 names taken — append a number
+    i = 2
+    base = random.choice(_PET_NAMES)
+    while f"{base}{i}" in exclude:
+        i += 1
+    return f"{base}{i}"
+
+
+def _taken_names(phone: str | None = None) -> set[str]:
+    """Return set of shortNames already in use (active or paused) for the given phone."""
+    with engine.connect() as conn:
+        q = select(reminders.c.shortName).where(
+            reminders.c.status.in_(["active", "paused"]),
+            reminders.c.shortName.isnot(None),
+        )
+        if phone:
+            q = q.where(reminders.c.triggerSource == phone)
+        rows = conn.execute(q).all()
+    return {r[0] for r in rows if r[0]}
 
 
 def _verify_alfred_key(x_alfred_api_key: str | None = Header(default=None)) -> None:
@@ -145,26 +238,45 @@ def capabilities():
 
 
 def _day_utc_bounds(date_entity: str):
-    """Return (start_iso, end_iso) UTC strings for the target date in Asia/Shanghai (UTC+8)."""
-    now_local = datetime.now(timezone.utc) + timedelta(hours=8)
+    """Return (target_date, start_iso, end_iso) UTC strings for the target date in the default timezone."""
+    tz = pytz.timezone(_DEFAULT_TZ)
+    now_local = datetime.now(tz)
     if date_entity == "tomorrow":
         target = (now_local + timedelta(days=1)).date()
     elif date_entity == "yesterday":
         target = (now_local - timedelta(days=1)).date()
     else:
         target = now_local.date()
-    # Midnight Asia/Shanghai = UTC-8h the same calendar day
-    day_start = datetime(target.year, target.month, target.day, 0, 0, 0) - timedelta(hours=8)
-    day_end = day_start + timedelta(days=1)
-    return target, day_start.strftime("%Y-%m-%dT%H:%M:%S"), day_end.strftime("%Y-%m-%dT%H:%M:%S")
+    # Midnight in local timezone → convert to UTC
+    day_start_local = tz.localize(datetime(target.year, target.month, target.day, 0, 0, 0))
+    day_end_local = day_start_local + timedelta(days=1)
+    day_start_utc = day_start_local.astimezone(timezone.utc)
+    day_end_utc = day_end_local.astimezone(timezone.utc)
+    return target, day_start_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00"), day_end_utc.strftime("%Y-%m-%dT%H:%M:%S+00:00")
 
 
 def _fmt_utc_time(iso: str) -> str:
-    """Convert a UTC ISO string to Asia/Shanghai HH:MM for display."""
+    """Convert a UTC ISO string to local time HH:MM for display."""
     try:
         dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
-        local = dt.replace(tzinfo=timezone.utc) + timedelta(hours=8)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        tz = pytz.timezone(_DEFAULT_TZ)
+        local = dt.astimezone(tz)
         return local.strftime("%H:%M")
+    except Exception:
+        return iso
+
+
+def _fmt_local(iso: str) -> str:
+    """Convert a UTC ISO string to a friendly local date+time string, e.g. 'Apr 19 at 11:02 PM PDT'."""
+    try:
+        dt = datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        tz = pytz.timezone(_DEFAULT_TZ)
+        local = dt.astimezone(tz)
+        return local.strftime("%-m/%-d at %-I:%M %p %Z")
     except Exception:
         return iso
 
@@ -186,8 +298,11 @@ async def alfred_execute(req: AlfredExecuteRequest):
             )
         lines = []
         for r in rows:
-            fire = r.get("nextFireAt") or r.get("fireAt") or "TBD"
-            lines.append(f"- {r['title']} @ {fire}")
+            fire_raw = r.get("nextFireAt") or r.get("fireAt")
+            fire = _fmt_local(fire_raw) if fire_raw else "TBD"
+            pet = r.get("shortName") or "?"
+            lines.append(f"\U0001f43e {pet}: {r['title']} @ {fire}")
+        lines.append('\nTo cancel, say "cancel Mochi" or "cancel [pet name]"')
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message="Your reminders:\n" + "\n".join(lines),
@@ -215,12 +330,64 @@ async def alfred_execute(req: AlfredExecuteRequest):
                 message=f"No reminders scheduled for {label.lower()} ({target_date}).",
             )
         lines = [
-            f"- {r['title']} @ {_fmt_utc_time(r['nextFireAt'])}"
+            f"\U0001f43e {r['shortName'] or '?'}: {r['title']} @ {_fmt_utc_time(r['nextFireAt'])}"
             for r in rows
         ]
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message=f"{label}'s schedule ({target_date}):\n" + "\n".join(lines),
+        )
+
+    if req.intent == "cancel_reminder":
+        ref = (req.entities.get("ref") or req.entities.get("title") or "").strip()
+        if not ref:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="INSUFFICIENT_DATA",
+                message="Which reminder should I cancel? Say the number or name, e.g. \"cancel reminder 1\" or \"cancel Alarm\".",
+            )
+        # Fetch active reminders for this user ordered by creation time
+        phone = req.whatsapp_id
+        with engine.connect() as conn:
+            user_rows = conn.execute(
+                select(reminders)
+                .where(
+                    reminders.c.status == "active",
+                    reminders.c.triggerSource == phone,
+                )
+                .order_by(reminders.c.createdAt)
+            ).mappings().all()
+
+        matched_id = None
+        matched_title = None
+        matched_pet = None
+        ref_lower = ref.lower()
+        for row in user_rows:
+            pet = (row.get("shortName") or "").lower()
+            title = (row.get("title") or "").lower()
+            if ref_lower == pet or ref_lower in pet or ref_lower in title:
+                matched_id = row["id"]
+                matched_title = row["title"]
+                matched_pet = row.get("shortName")
+                break
+
+        if matched_id is None:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                message=f'I couldn\'t find a reminder called "{ref}". Say "list reminders" to see yours.',
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        with engine.connect() as conn:
+            conn.execute(
+                update(reminders).where(reminders.c.id == matched_id).values(status="done", updatedAt=now)
+            )
+            conn.commit()
+
+        label = f"\U0001f43e {matched_pet}" if matched_pet else matched_title
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message=f"Cancelled {label}: {matched_title}",
         )
 
     if req.intent == "add_reminder":
@@ -233,10 +400,10 @@ async def alfred_execute(req: AlfredExecuteRequest):
             )
         # Parse and create reminder using the existing parse service
         try:
-            result = await parse_reminder(title, "Asia/Shanghai")
+            result = await parse_reminder(title, _DEFAULT_TZ)
         except Exception:
             result = {"reminder": {"title": title, "type": "once", "fireAt": None,
-                                   "cronExpression": None, "timezone": "Asia/Shanghai",
+                                   "cronExpression": None, "timezone": _DEFAULT_TZ,
                                    "triggerSource": "whatsapp", "triggerCondition": None,
                                    "body": title},
                       "confidence": 0.5, "rawInterpretation": title}
@@ -246,18 +413,22 @@ async def alfred_execute(req: AlfredExecuteRequest):
         parsed = result["reminder"]
         fire_at = parsed.get("fireAt")
         cron = parsed.get("cronExpression")
-        next_fire = compute_next_fire(cron, parsed.get("timezone", "Asia/Shanghai")) if cron else fire_at
+        tz_name = parsed.get("timezone", _DEFAULT_TZ)
+        fire_at_utc = _to_utc_iso(fire_at, tz_name)
+        next_fire = compute_next_fire(cron, tz_name) if cron else fire_at_utc
 
+        short_name = _assign_pet_name(_taken_names(req.whatsapp_id))
         row = {
             "id": reminder_id,
             "title": parsed.get("title", title),
             "body": parsed.get("body", title),
             "type": parsed.get("type", "once"),
-            "fireAt": fire_at,
+            "fireAt": fire_at_utc,
             "cronExpression": cron,
-            "timezone": parsed.get("timezone", "Asia/Shanghai"),
+            "timezone": parsed.get("timezone", _DEFAULT_TZ),
             "triggerSource": req.whatsapp_id,
             "triggerCondition": parsed.get("triggerCondition"),
+            "shortName": short_name,
             "status": "active",
             "lastFiredAt": None,
             "nextFireAt": next_fire,
@@ -268,10 +439,10 @@ async def alfred_execute(req: AlfredExecuteRequest):
             conn.execute(insert(reminders).values(**row))
             conn.commit()
 
-        fire_display = next_fire or "TBD"
+        fire_display = _fmt_local(next_fire) if next_fire else "TBD"
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
-            message=f"Reminder set: {row['title']}\nAt: {fire_display}",
+            message=f"Reminder set \U0001f43e {short_name}: {row['title']}\nAt: {fire_display}",
         )
 
     return AlfredExecuteResponse(

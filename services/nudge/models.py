@@ -33,6 +33,10 @@ class ReminderCreate(BaseModel):
     triggerCondition: Optional[dict] = None
 
 
+class ReminderUpdate(BaseModel):
+    status: Literal["active", "paused", "done"]
+
+
 class ReminderOut(BaseModel):
     id: str
     title: str
@@ -43,6 +47,7 @@ class ReminderOut(BaseModel):
     timezone: str
     triggerSource: Optional[str] = None
     triggerCondition: Optional[dict] = None
+    shortName: Optional[str] = None
     status: str
     lastFiredAt: Optional[str] = None
     nextFireAt: Optional[str] = None

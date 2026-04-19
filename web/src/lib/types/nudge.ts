@@ -4,6 +4,7 @@ export type ReminderStatus = "active" | "paused" | "done" | "expired";
 export interface Reminder {
   id: string;
   title: string;
+  shortName?: string | null;
   body?: string | null;
   type: ReminderType;
   fireAt?: string | null;
