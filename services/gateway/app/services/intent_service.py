@@ -55,6 +55,15 @@ KEYWORD_MAP = [
     (['\u53d6\u6d88\u63d0\u9192', '\u5220\u9664\u63d0\u9192', 'cancel reminder', 'delete reminder',
       'remove reminder', 'cancel alarm'],
      'cancel_reminder'),
+    # search_notes: must come before add_note to avoid "找笔记" matching add_note
+    (['\u627e\u7b14\u8bb0', '\u641c\u7d22\u7b14\u8bb0', '\u67e5\u7b14\u8bb0', 'search note', 'find note'],
+     'search_notes'),
+    # list_notes: \u6211\u7684\u7b14\u8bb0=my-notes, \u7b14\u8bb0\u5217\u8868=note-list, \u67e5\u770b\u7b14\u8bb0=view-notes
+    (['\u6211\u7684\u7b14\u8bb0', '\u7b14\u8bb0\u5217\u8868', '\u67e5\u770b\u7b14\u8bb0', 'list notes', 'my notes'],
+     'list_notes'),
+    # add_note: \u8bb0\u4e00\u4e0b=note-this, \u7b14\u8bb0=note, \u8bb0\u5f55=record, \u8bb0\u4e2a\u7b14\u8bb0=write-a-note
+    (['\u8bb0\u4e00\u4e0b', '\u7b14\u8bb0', '\u8bb0\u5f55', '\u8bb0\u4e2a\u7b14\u8bb0', 'jot', 'write down'],
+     'add_note'),
     # add_reminder: remind/hint/remind/don't-forget/remember/todo + english 'remind'
     (['\u63d0\u9192', '\u63d0\u793a', 'remind', '\u522b\u5fd8\u4e86', '\u8bb0\u5f97', '\u5f85\u529e'],
      'add_reminder'),
@@ -66,7 +75,7 @@ KEYWORD_MAP = [
 VALID_INTENTS = {
     'add_expense', 'add_income', 'get_balance', 'monthly_report',
     'set_budget', 'add_reminder', 'list_reminders', 'get_schedule',
-    'cancel_reminder',
+    'cancel_reminder', 'add_note', 'list_notes', 'search_notes',
 }
 
 
@@ -114,6 +123,20 @@ def _extract_entities(text: str, intent: str) -> dict:
                 entities['category'] = category
                 break
 
+    # Note content: everything after the trigger word is the note
+    if intent == 'add_note':
+        m2 = re.search(
+            r'(?:\u8bb0\u4e00\u4e0b|\u7b14\u8bb0|\u8bb0\u5f55|\u8bb0\u4e2a\u7b14\u8bb0|note[:\uff1a ]?|jot|write down)\s*(.+)',
+            text, re.IGNORECASE,
+        )
+        entities['content'] = m2.group(1).strip() if m2 else text
+
+    # Search query: extract search term after trigger word
+    if intent == 'search_notes':
+        m2 = re.search(r'(?:\u627e|\u641c|\u67e5|search|find)\s*(.+)', text, re.IGNORECASE)
+        if m2:
+            entities['query'] = m2.group(1).strip()
+
     # Reminder title: extract content after trigger word
     # trigger words: \u63d0\u9192=remind, \u522b\u5fd8\u4e86=don't-forget, \u8bb0\u5f97=remember
     if intent == 'add_reminder':
@@ -142,7 +165,7 @@ _INTENT_SCHEMA = {
                 "enum": [
                     "add_expense", "add_income", "get_balance", "monthly_report",
                     "set_budget", "add_reminder", "list_reminders", "get_schedule",
-                    "cancel_reminder", "none",
+                    "cancel_reminder", "add_note", "list_notes", "search_notes", "none",
                 ],
             },
             "confidence": {"type": "number"},
@@ -175,6 +198,9 @@ _SYSTEM_PROMPT = (
     "- list_reminders: user wants to see their active reminders\n"
     "- get_schedule: user asks about today's schedule or calendar\n"
     "- cancel_reminder: user wants to cancel, delete, or remove a reminder (by number or name)\n"
+    "- add_note: user wants to record or save a note or memory\n"
+    "- list_notes: user wants to see their recent notes\n"
+    "- search_notes: user wants to find or search their notes by topic\n"
     "- none: message does not match any of the above\n\n"
     "Extract entities when present:\n"
     "- amount: numeric value (e.g. 50.0)\n"

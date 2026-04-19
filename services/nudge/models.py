@@ -37,6 +37,28 @@ class ReminderUpdate(BaseModel):
     status: Literal["active", "paused", "done"]
 
 
+# ── Note models ─────────────────────────────────────────────────────
+
+class NoteCreate(BaseModel):
+    content: str
+    tags: Optional[list[str]] = None
+    triggerSource: Optional[str] = None
+
+
+class NoteOut(BaseModel):
+    id: str
+    content: str
+    tags: Optional[list[str]] = None
+    triggerSource: Optional[str] = None
+    status: str
+    createdAt: str
+    updatedAt: str
+
+
+class NoteUpdate(BaseModel):
+    status: Literal["active", "archived"]
+
+
 class ReminderOut(BaseModel):
     id: str
     title: str

@@ -1,4 +1,4 @@
-import type { ParseResponse, Reminder, ReminderCreate } from "../types/nudge";
+import type { ParseResponse, Reminder, ReminderCreate, Note } from "../types/nudge";
 
 const NUDGE_BASE = `${window.location.protocol}//${window.location.hostname}:8002`;
 
@@ -50,4 +50,19 @@ export function patchReminder(id: string, status: "active" | "paused" | "done"):
 
 export function deleteReminder(id: string): Promise<void> {
   return request<void>(`/api/nudge/reminders/${id}`, { method: "DELETE" });
+}
+
+export function listNotes(): Promise<Note[]> {
+  return request<Note[]>("/api/nudge/notes");
+}
+
+export function createNote(content: string, tags?: string[]): Promise<Note> {
+  return request<Note>("/api/nudge/notes", {
+    method: "POST",
+    body: JSON.stringify({ content, tags }),
+  });
+}
+
+export function deleteNote(id: string): Promise<void> {
+  return request<void>(`/api/nudge/notes/${id}`, { method: "DELETE" });
 }

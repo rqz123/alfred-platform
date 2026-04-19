@@ -1,14 +1,15 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listReminders } from "../../lib/api/nudge";
+import { listReminders, listNotes } from "../../lib/api/nudge";
 import { listPhoneBindings } from "../../lib/api/ourcents";
 import { ReminderSection } from "./ReminderList";
-import type { Reminder } from "../../lib/types/nudge";
+import { NoteList } from "./NoteList";
+import type { Reminder, Note } from "../../lib/types/nudge";
 
 const TZ = "America/Los_Angeles";
 
 function todayStrPDT(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: TZ }); // "YYYY-MM-DD"
+  return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
 }
 
 function firedTodayPDT(r: Reminder): boolean {
@@ -16,37 +17,41 @@ function firedTodayPDT(r: Reminder): boolean {
   return new Date(r.lastFiredAt).toLocaleDateString("en-CA", { timeZone: TZ }) === todayStrPDT();
 }
 
+type Tab = "reminders" | "notes";
+
 export default function NudgeDashboard() {
+  const [tab, setTab] = useState<Tab>("reminders");
   const [reminders, setReminders] = useState<Reminder[]>([]);
+  const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasPhone, setHasPhone] = useState<boolean | null>(null);
   const navigate = useNavigate();
 
   function loadReminders() {
-    listReminders()
-      .then(setReminders)
-      .catch(() => {})
-      .finally(() => setLoading(false));
+    listReminders().then(setReminders).catch(() => {});
+  }
+
+  function loadNotes() {
+    listNotes().then(setNotes).catch(() => {});
   }
 
   useEffect(() => {
-    loadReminders();
+    Promise.all([listReminders(), listNotes()])
+      .then(([r, n]) => { setReminders(r); setNotes(n); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
     listPhoneBindings()
       .then((b) => setHasPhone(b.length > 0))
       .catch(() => setHasPhone(null));
   }, []);
 
-  // Section 1: active + paused
+  // Reminder sections
   const activeReminders = reminders.filter(
     (r) => r.status === "active" || r.status === "paused"
   );
-
-  // Section 2: fired today (done, lastFiredAt is today in PDT)
   const firedToday = reminders
     .filter((r) => (r.status === "done" || r.status === "expired") && firedTodayPDT(r))
     .sort((a, b) => new Date(b.lastFiredAt!).getTime() - new Date(a.lastFiredAt!).getTime());
-
-  // Section 3: past (done/expired but not today)
   const past = reminders
     .filter((r) => (r.status === "done" || r.status === "expired") && !firedTodayPDT(r))
     .sort((a, b) => {
@@ -55,15 +60,44 @@ export default function NudgeDashboard() {
       return bt - at;
     });
 
+  const activeNotes = notes.filter((n) => n.status === "active");
+
   return (
     <div style={{ padding: "1.5rem" }}>
       <div style={{ maxWidth: 700 }}>
-        <div style={{ marginBottom: "1.5rem" }}>
+        <div style={{ marginBottom: "1.25rem" }}>
           <h2 style={{ margin: 0 }}>Nudge</h2>
-          <p style={{ margin: "4px 0 0", color: "#6b7280", fontSize: 14 }}>Your reminders at a glance</p>
+          <p style={{ margin: "4px 0 0", color: "#6b7280", fontSize: 14 }}>Reminders & notes</p>
         </div>
 
-        {hasPhone === false && (
+        {/* Tabs */}
+        <div style={{ display: "flex", gap: 4, marginBottom: "1.5rem", borderBottom: "1px solid #e5e7eb", paddingBottom: 0 }}>
+          {(["reminders", "notes"] as Tab[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              style={{
+                background: "none",
+                border: "none",
+                borderBottom: tab === t ? "2px solid #6366f1" : "2px solid transparent",
+                padding: "6px 16px",
+                fontSize: 14,
+                fontWeight: tab === t ? 600 : 400,
+                color: tab === t ? "#6366f1" : "#6b7280",
+                cursor: "pointer",
+                marginBottom: -1,
+                borderRadius: 0,
+                textTransform: "capitalize",
+              }}
+            >
+              {t === "reminders"
+                ? `Reminders${activeReminders.length ? ` (${activeReminders.length})` : ""}`
+                : `Notes${activeNotes.length ? ` (${activeNotes.length})` : ""}`}
+            </button>
+          ))}
+        </div>
+
+        {hasPhone === false && tab === "reminders" && (
           <div style={{
             background: "#fffbeb", border: "1px solid #fcd34d", borderRadius: 8,
             padding: "10px 14px", fontSize: 13, color: "#92400e", marginBottom: "1.5rem",
@@ -81,7 +115,7 @@ export default function NudgeDashboard() {
 
         {loading ? (
           <p style={{ color: "#9ca3af", fontSize: 14 }}>Loading…</p>
-        ) : (
+        ) : tab === "reminders" ? (
           <>
             <ReminderSection
               title="Active"
@@ -103,6 +137,8 @@ export default function NudgeDashboard() {
               emptyText="No past reminders."
             />
           </>
+        ) : (
+          <NoteList notes={activeNotes} onRefresh={loadNotes} />
         )}
       </div>
     </div>

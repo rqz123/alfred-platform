@@ -13,6 +13,18 @@ engine = create_engine(
 
 metadata = MetaData()
 
+notes = Table(
+    "notes",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("content", Text, nullable=False),
+    Column("tags", JSON, nullable=True),
+    Column("triggerSource", String, nullable=True),
+    Column("status", String, nullable=False, default="active"),  # active | archived
+    Column("createdAt", String, nullable=False),
+    Column("updatedAt", String, nullable=False),
+)
+
 reminders = Table(
     "reminders",
     metadata,

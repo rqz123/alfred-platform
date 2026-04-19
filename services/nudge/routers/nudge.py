@@ -17,8 +17,12 @@ from pydantic import BaseModel
 from sqlalchemy import select, insert, update, delete
 
 from shared.auth import make_verify_token, TokenPayload
-from database import engine, reminders
-from models import ParseRequest, ParseResponse, ParsedReminder, ReminderCreate, ReminderOut, ReminderUpdate
+from database import engine, reminders, notes
+from models import (
+    ParseRequest, ParseResponse, ParsedReminder,
+    ReminderCreate, ReminderOut, ReminderUpdate,
+    NoteCreate, NoteOut, NoteUpdate,
+)
 from services.parser import parse_reminder, compute_next_fire
 
 router = APIRouter()
@@ -144,6 +148,56 @@ async def delete_reminder(
 
 
 # ─────────────────────────────────────────────────────
+# Note REST endpoints
+# ─────────────────────────────────────────────────────
+
+@router.post("/notes", response_model=NoteOut)
+async def create_note(data: NoteCreate, _: TokenPayload = Depends(verify_token)):
+    now = datetime.now(timezone.utc).isoformat()
+    note_id = str(uuid.uuid4())
+    row = {
+        "id": note_id,
+        "content": data.content,
+        "tags": data.tags,
+        "triggerSource": data.triggerSource,
+        "status": "active",
+        "createdAt": now,
+        "updatedAt": now,
+    }
+    with engine.connect() as conn:
+        conn.execute(insert(notes).values(**row))
+        conn.commit()
+    return NoteOut(**row)
+
+
+@router.get("/notes", response_model=list[NoteOut])
+async def list_notes_endpoint(
+    status: Optional[str] = None,
+    _: TokenPayload = Depends(verify_token),
+):
+    with engine.connect() as conn:
+        query = select(notes).order_by(notes.c.createdAt.desc())
+        rows = conn.execute(query).mappings().all()
+    result = [NoteOut(**dict(r)) for r in rows]
+    if status:
+        result = [n for n in result if n.status == status]
+    return result
+
+
+@router.delete("/notes/{note_id}", status_code=204)
+async def delete_note(
+    note_id: str,
+    _: TokenPayload = Depends(verify_token),
+):
+    with engine.connect() as conn:
+        row = conn.execute(select(notes).where(notes.c.id == note_id)).mappings().first()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Note not found")
+        conn.execute(delete(notes).where(notes.c.id == note_id))
+        conn.commit()
+
+
+# ─────────────────────────────────────────────────────
 # ASI (Alfred Service Interface) endpoints
 # ─────────────────────────────────────────────────────
 
@@ -233,6 +287,9 @@ def capabilities():
             },
             {"intent": "list_reminders", "description": "List active reminders"},
             {"intent": "get_schedule", "description": "View today's schedule"},
+            {"intent": "add_note", "description": "Save a note or memory"},
+            {"intent": "list_notes", "description": "List recent notes"},
+            {"intent": "search_notes", "description": "Search notes by topic"},
         ],
     }
 
@@ -443,6 +500,126 @@ async def alfred_execute(req: AlfredExecuteRequest):
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message=f"Reminder set \U0001f43e {short_name}: {row['title']}\nAt: {fire_display}",
+        )
+
+    if req.intent == "add_note":
+        content = (req.entities.get("content") or "").strip()
+        if not content:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="INSUFFICIENT_DATA",
+                message="What would you like me to note down?",
+            )
+        now = datetime.now(timezone.utc).isoformat()
+        note_id = str(uuid.uuid4())
+        row = {
+            "id": note_id,
+            "content": content,
+            "tags": None,
+            "triggerSource": req.whatsapp_id,
+            "status": "active",
+            "createdAt": now,
+            "updatedAt": now,
+        }
+        with engine.connect() as conn:
+            conn.execute(insert(notes).values(**row))
+            conn.commit()
+        preview = content[:50] + ("…" if len(content) > 50 else "")
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message=f"\u270f\ufe0f Noted: {preview}",
+        )
+
+    if req.intent == "list_notes":
+        phone = req.whatsapp_id
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(notes)
+                .where(notes.c.status == "active", notes.c.triggerSource == phone)
+                .order_by(notes.c.createdAt.desc())
+                .limit(10)
+            ).mappings().all()
+        if not rows:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="success",
+                message="You haven't recorded any notes yet.",
+            )
+        tz = pytz.timezone(_DEFAULT_TZ)
+        lines = []
+        for i, r in enumerate(rows, 1):
+            try:
+                dt = datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00"))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                date_str = dt.astimezone(tz).strftime("%-m/%-d")
+            except Exception:
+                date_str = ""
+            preview = r["content"][:60] + ("…" if len(r["content"]) > 60 else "")
+            lines.append(f"{i}. {preview} ({date_str})")
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message="Your notes:\n" + "\n".join(lines),
+        )
+
+    if req.intent == "search_notes":
+        query = (req.entities.get("query") or req.entities.get("content") or "").strip()
+        if not query:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="INSUFFICIENT_DATA",
+                message="What would you like to search for in your notes?",
+            )
+        phone = req.whatsapp_id
+        with engine.connect() as conn:
+            rows = conn.execute(
+                select(notes)
+                .where(notes.c.status == "active", notes.c.triggerSource == phone)
+                .order_by(notes.c.createdAt.desc())
+            ).mappings().all()
+        if not rows:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="success",
+                message="You have no notes to search.",
+            )
+        # Use GPT to find relevant notes
+        notes_text = "\n".join(
+            f"{i}. {r['content']}" for i, r in enumerate(rows, 1)
+        )
+        try:
+            from services.parser import get_client
+            client = get_client()
+            ai_resp = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a personal assistant helping search through the user's notes. "
+                            "Given the notes list and a search query, find the most relevant notes "
+                            "and summarize what you found. Be concise (under 200 words). "
+                            "If nothing is relevant, say so clearly."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"My notes:\n{notes_text}\n\nSearch query: {query}",
+                    },
+                ],
+                max_tokens=300,
+                timeout=15.0,
+            )
+            answer = ai_resp.choices[0].message.content.strip()
+        except Exception:
+            # Fallback: simple substring search
+            matches = [r for r in rows if query.lower() in r["content"].lower()]
+            if not matches:
+                answer = f'No notes found matching "{query}".'
+            else:
+                lines = [f"- {r['content'][:80]}" for r in matches[:5]]
+                answer = f"Found {len(matches)} matching note(s):\n" + "\n".join(lines)
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message=answer,
         )
 
     return AlfredExecuteResponse(

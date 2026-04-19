@@ -23,3 +23,7 @@ services:
       - add_reminder
       - list_reminders
       - get_schedule
+      - cancel_reminder
+      - add_note
+      - list_notes
+      - search_notes

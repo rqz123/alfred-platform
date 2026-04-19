@@ -35,6 +35,16 @@ export interface ParseResponse {
   nextFireAt?: string | null;
 }
 
+export interface Note {
+  id: string;
+  content: string;
+  tags?: string[] | null;
+  triggerSource?: string | null;
+  status: "active" | "archived";
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ReminderCreate {
   title: string;
   body?: string | null;
