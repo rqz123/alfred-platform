@@ -202,19 +202,30 @@ interface SectionProps {
   title: string;
   reminders: Reminder[];
   onRefresh?: () => void;
+  onClearAll?: () => void;
   variant: "active" | "awaiting" | "fired";
   emptyText?: string;
 }
 
-export function ReminderSection({ title, reminders, onRefresh, variant, emptyText }: SectionProps) {
+export function ReminderSection({ title, reminders, onRefresh, onClearAll, variant, emptyText }: SectionProps) {
   return (
     <div style={{ marginBottom: "1.75rem" }}>
-      <h3 style={{ margin: "0 0 0.6rem", fontSize: 14, fontWeight: 600, color: "#374151", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-        {title}
-        <span style={{ marginLeft: 8, fontWeight: 400, color: "#9ca3af", fontSize: 12, textTransform: "none", letterSpacing: 0 }}>
-          ({reminders.length})
-        </span>
-      </h3>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.6rem" }}>
+        <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "#374151", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+          {title}
+          <span style={{ marginLeft: 8, fontWeight: 400, color: "#9ca3af", fontSize: 12, textTransform: "none", letterSpacing: 0 }}>
+            ({reminders.length})
+          </span>
+        </h3>
+        {onClearAll && reminders.length > 0 && (
+          <button
+            onClick={onClearAll}
+            style={{ fontSize: 11, color: "#9ca3af", background: "none", border: "1px solid #e5e7eb", borderRadius: 4, padding: "2px 8px", cursor: "pointer" }}
+          >
+            Clear all
+          </button>
+        )}
+      </div>
       {reminders.length === 0 ? (
         <p style={{ color: "#9ca3af", fontSize: 13, margin: 0 }}>{emptyText ?? "None"}</p>
       ) : (

@@ -1,10 +1,19 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listReminders, listNotes } from "../../lib/api/nudge";
+import { listReminders, listNotes, deleteReminder } from "../../lib/api/nudge";
 import { listPhoneBindings } from "../../lib/api/ourcents";
 import { ReminderSection } from "./ReminderList";
 import { NoteList } from "./NoteList";
 import type { Reminder, Note } from "../../lib/types/nudge";
+
+type Period = "7d" | "30d" | "all";
+
+function withinPeriod(iso: string | null | undefined, period: Period): boolean {
+  if (period === "all") return true;
+  if (!iso) return false;
+  const days = period === "7d" ? 7 : 30;
+  return Date.now() - new Date(iso).getTime() < days * 86400_000;
+}
 
 
 
@@ -12,6 +21,7 @@ type Tab = "reminders" | "notes";
 
 export default function NudgeDashboard() {
   const [tab, setTab] = useState<Tab>("reminders");
+  const [period, setPeriod] = useState<Period>("7d");
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [notes, setNotes] = useState<Note[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,11 +58,16 @@ export default function NudgeDashboard() {
     (r) => r.status === "active" || r.status === "paused"
   );
   const confirmedReminders = reminders
-    .filter((r) => r.status === "done")
+    .filter((r) => r.status === "done" && withinPeriod(r.lastFiredAt ?? r.updatedAt, period))
     .sort((a, b) => new Date(b.lastFiredAt ?? b.updatedAt).getTime() - new Date(a.lastFiredAt ?? a.updatedAt).getTime());
   const expiredReminders = reminders
-    .filter((r) => r.status === "expired")
+    .filter((r) => r.status === "expired" && withinPeriod(r.updatedAt, period))
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+
+  async function clearAll(ids: string[]) {
+    await Promise.all(ids.map((id) => deleteReminder(id).catch(() => {})));
+    loadReminders();
+  }
 
   const activeNotes = notes.filter((n) => n.status === "active");
 
@@ -124,17 +139,42 @@ export default function NudgeDashboard() {
               variant="active"
               emptyText="No active reminders."
             />
+            {/* Period filter — shared for Confirmed + Expired */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: "1rem" }}>
+              <span style={{ fontSize: 12, color: "#9ca3af" }}>Show:</span>
+              {(["7d", "30d", "all"] as Period[]).map((p) => (
+                <button
+                  key={p}
+                  onClick={() => setPeriod(p)}
+                  style={{
+                    fontSize: 12,
+                    padding: "2px 10px",
+                    borderRadius: 99,
+                    border: "1px solid",
+                    borderColor: period === p ? "#6366f1" : "#e5e7eb",
+                    background: period === p ? "#6366f1" : "none",
+                    color: period === p ? "#fff" : "#6b7280",
+                    cursor: "pointer",
+                  }}
+                >
+                  {p === "7d" ? "7 days" : p === "30d" ? "30 days" : "All"}
+                </button>
+              ))}
+            </div>
+
             <ReminderSection
               title="Confirmed"
               reminders={confirmedReminders}
               variant="fired"
-              emptyText="No confirmed reminders yet."
+              emptyText="No confirmed reminders in this period."
+              onClearAll={() => clearAll(confirmedReminders.map((r) => r.id))}
             />
             <ReminderSection
               title="Expired"
               reminders={expiredReminders}
               variant="fired"
-              emptyText="No expired reminders."
+              emptyText="No expired reminders in this period."
+              onClearAll={() => clearAll(expiredReminders.map((r) => r.id))}
             />
           </>
         ) : (
