@@ -6,16 +6,7 @@ import { ReminderSection } from "./ReminderList";
 import { NoteList } from "./NoteList";
 import type { Reminder, Note } from "../../lib/types/nudge";
 
-const TZ = "America/Los_Angeles";
 
-function todayStrPDT(): string {
-  return new Date().toLocaleDateString("en-CA", { timeZone: TZ });
-}
-
-function firedTodayPDT(r: Reminder): boolean {
-  if (!r.lastFiredAt) return false;
-  return new Date(r.lastFiredAt).toLocaleDateString("en-CA", { timeZone: TZ }) === todayStrPDT();
-}
 
 type Tab = "reminders" | "notes";
 
@@ -46,19 +37,22 @@ export default function NudgeDashboard() {
   }, []);
 
   // Reminder sections
+  const awaitingReminders = reminders
+    .filter((r) => r.status === "awaiting")
+    .sort((a, b) => {
+      const at = a.firstFiredAt ? new Date(a.firstFiredAt).getTime() : 0;
+      const bt = b.firstFiredAt ? new Date(b.firstFiredAt).getTime() : 0;
+      return at - bt; // oldest first (most urgent)
+    });
   const activeReminders = reminders.filter(
     (r) => r.status === "active" || r.status === "paused"
   );
-  const firedToday = reminders
-    .filter((r) => (r.status === "done" || r.status === "expired") && firedTodayPDT(r))
-    .sort((a, b) => new Date(b.lastFiredAt!).getTime() - new Date(a.lastFiredAt!).getTime());
-  const past = reminders
-    .filter((r) => (r.status === "done" || r.status === "expired") && !firedTodayPDT(r))
-    .sort((a, b) => {
-      const at = a.lastFiredAt ? new Date(a.lastFiredAt).getTime() : 0;
-      const bt = b.lastFiredAt ? new Date(b.lastFiredAt).getTime() : 0;
-      return bt - at;
-    });
+  const confirmedReminders = reminders
+    .filter((r) => r.status === "done")
+    .sort((a, b) => new Date(b.lastFiredAt ?? b.updatedAt).getTime() - new Date(a.lastFiredAt ?? a.updatedAt).getTime());
+  const expiredReminders = reminders
+    .filter((r) => r.status === "expired")
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
 
   const activeNotes = notes.filter((n) => n.status === "active");
 
@@ -118,6 +112,12 @@ export default function NudgeDashboard() {
         ) : tab === "reminders" ? (
           <>
             <ReminderSection
+              title="Awaiting Confirmation"
+              reminders={awaitingReminders}
+              variant="awaiting"
+              emptyText="No reminders awaiting confirmation."
+            />
+            <ReminderSection
               title="Active"
               reminders={activeReminders}
               onRefresh={loadReminders}
@@ -125,16 +125,16 @@ export default function NudgeDashboard() {
               emptyText="No active reminders."
             />
             <ReminderSection
-              title="Fired Today"
-              reminders={firedToday}
+              title="Confirmed"
+              reminders={confirmedReminders}
               variant="fired"
-              emptyText="Nothing fired today yet."
+              emptyText="No confirmed reminders yet."
             />
             <ReminderSection
-              title="Past"
-              reminders={past}
+              title="Expired"
+              reminders={expiredReminders}
               variant="fired"
-              emptyText="No past reminders."
+              emptyText="No expired reminders."
             />
           </>
         ) : (

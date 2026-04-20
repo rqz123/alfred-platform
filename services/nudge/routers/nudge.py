@@ -502,6 +502,44 @@ async def alfred_execute(req: AlfredExecuteRequest):
             message=f"Reminder set \U0001f43e {short_name}: {row['title']}\nAt: {fire_display}",
         )
 
+    if req.intent == "acknowledge_reminder":
+        phone = req.whatsapp_id
+        with engine.connect() as conn:
+            awaiting_rows = conn.execute(
+                select(reminders).where(
+                    reminders.c.status == "awaiting",
+                    reminders.c.triggerSource == phone,
+                )
+            ).mappings().all()
+
+        if not awaiting_rows:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="success",
+                message="No reminders are waiting for confirmation.",
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        confirmed = []
+        for r in awaiting_rows:
+            if r.get("cronExpression"):
+                # Recurring: schedule next occurrence
+                from services.parser import compute_next_fire
+                next_fire = compute_next_fire(r["cronExpression"], r.get("timezone", _DEFAULT_TZ))
+                upd = dict(status="active", nextFireAt=next_fire, ackRetries="0", updatedAt=now)
+            else:
+                upd = dict(status="done", nextFireAt=None, ackRetries="0", updatedAt=now)
+            with engine.connect() as conn:
+                conn.execute(update(reminders).where(reminders.c.id == r["id"]).values(**upd))
+                conn.commit()
+            pet = r.get("shortName")
+            confirmed.append(f"\U0001f43e {pet}: {r['title']}" if pet else r["title"])
+
+        names = "\n".join(confirmed)
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message=f"\u2713 Got it! Confirmed:\n{names}",
+        )
+
     if req.intent == "add_note":
         content = (req.entities.get("content") or "").strip()
         if not content:

@@ -24,6 +24,7 @@ services:
       - list_reminders
       - get_schedule
       - cancel_reminder
+      - acknowledge_reminder
       - add_note
       - list_notes
       - search_notes

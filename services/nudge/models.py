@@ -70,8 +70,10 @@ class ReminderOut(BaseModel):
     triggerSource: Optional[str] = None
     triggerCondition: Optional[dict] = None
     shortName: Optional[str] = None
-    status: str
+    status: str   # active | paused | awaiting | done | expired
     lastFiredAt: Optional[str] = None
+    firstFiredAt: Optional[str] = None
     nextFireAt: Optional[str] = None
+    ackRetries: Optional[str] = None
     createdAt: str
     updatedAt: str

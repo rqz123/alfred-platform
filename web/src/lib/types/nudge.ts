@@ -1,5 +1,5 @@
 export type ReminderType = "once" | "recurring" | "event";
-export type ReminderStatus = "active" | "paused" | "done" | "expired";
+export type ReminderStatus = "active" | "paused" | "awaiting" | "done" | "expired";
 
 export interface Reminder {
   id: string;
@@ -14,7 +14,9 @@ export interface Reminder {
   triggerCondition?: object | null;
   status: ReminderStatus;
   lastFiredAt?: string | null;
+  firstFiredAt?: string | null;
   nextFireAt?: string | null;
+  ackRetries?: string | null;
   createdAt: string;
   updatedAt: string;
 }

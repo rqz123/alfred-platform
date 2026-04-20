@@ -51,6 +51,10 @@ KEYWORD_MAP = [
     # get_balance: balance/remaining/account/surplus/how-much
     (['\u4f59\u989d', '\u8fd8\u5269', '\u8d26\u6237', '\u7ed3\u4f59', '\u591a\u5c11\u94b1'],
      'get_balance'),
+    # acknowledge_reminder: OK/got-it/confirmed/received + quick-reply button "✓ OK"
+    (['\u2713 ok', '\u786e\u8ba4', '\u6536\u5230', '\u77e5\u9053\u4e86', '\u660e\u767d\u4e86',
+      '\u597d\u7684', 'got it', 'confirmed', 'acknowledged'],
+     'acknowledge_reminder'),
     # cancel_reminder: cancel/delete/remove + reminder keyword
     (['\u53d6\u6d88\u63d0\u9192', '\u5220\u9664\u63d0\u9192', 'cancel reminder', 'delete reminder',
       'remove reminder', 'cancel alarm'],
@@ -75,7 +79,7 @@ KEYWORD_MAP = [
 VALID_INTENTS = {
     'add_expense', 'add_income', 'get_balance', 'monthly_report',
     'set_budget', 'add_reminder', 'list_reminders', 'get_schedule',
-    'cancel_reminder', 'add_note', 'list_notes', 'search_notes',
+    'cancel_reminder', 'acknowledge_reminder', 'add_note', 'list_notes', 'search_notes',
 }
 
 
@@ -165,7 +169,8 @@ _INTENT_SCHEMA = {
                 "enum": [
                     "add_expense", "add_income", "get_balance", "monthly_report",
                     "set_budget", "add_reminder", "list_reminders", "get_schedule",
-                    "cancel_reminder", "add_note", "list_notes", "search_notes", "none",
+                    "cancel_reminder", "acknowledge_reminder",
+                    "add_note", "list_notes", "search_notes", "none",
                 ],
             },
             "confidence": {"type": "number"},
@@ -198,6 +203,7 @@ _SYSTEM_PROMPT = (
     "- list_reminders: user wants to see their active reminders\n"
     "- get_schedule: user asks about today's schedule or calendar\n"
     "- cancel_reminder: user wants to cancel, delete, or remove a reminder (by number or name)\n"
+    "- acknowledge_reminder: user confirms or acknowledges a reminder (OK, got it, confirmed, 好的, 收到, 知道了)\n"
     "- add_note: user wants to record or save a note or memory\n"
     "- list_notes: user wants to see their recent notes\n"
     "- search_notes: user wants to find or search their notes by topic\n"

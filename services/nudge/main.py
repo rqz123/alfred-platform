@@ -19,25 +19,53 @@ NUDGE_API_KEY = os.environ.get("NUDGE_API_KEY", "") or os.environ.get("ALFRED_AP
 logger = logging.getLogger("nudge.firing")
 
 
+# ── Ack-retry config ────────────────────────────────────────────────────────
+# After a reminder fires the user must reply OK.  If they don't, we re-fire
+# every REFIRE_INTERVAL_SECONDS up to MAX_ACK_RETRIES extra times, then expire.
+REFIRE_INTERVAL_SECONDS = int(os.environ.get("NUDGE_REFIRE_INTERVAL_SECONDS", "300"))
+MAX_ACK_RETRIES = int(os.environ.get("NUDGE_MAX_ACK_RETRIES", "3"))
+
+# ── Push-failure config (network errors, not user non-response) ──────────────
 PUSH_MAX_RETRIES = 3
-PUSH_RETRY_INTERVAL_SECONDS = 300   # 5 minutes between retries
-PUSH_EXPIRY_SECONDS = 1800          # give up after 30 minutes
+PUSH_RETRY_INTERVAL_SECONDS = 60   # 1 minute between push-failure retries
+
+
+async def _push(phone: str, message: str, quick_replies: list[str]) -> bool:
+    """Send a WhatsApp push via Gateway. Returns True on success."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(
+                f"{GATEWAY_URL}/api/internal/push",
+                json={"user_phone": phone, "message": message,
+                      "source_service": "nudge", "quick_replies": quick_replies},
+                headers={"X-Alfred-API-Key": NUDGE_API_KEY},
+            )
+        return True
+    except Exception as exc:
+        logger.warning("Push to %s failed: %s", phone, exc)
+        return False
+
+
+def _extract_phone(trigger_source: str) -> str | None:
+    if trigger_source and any(c.isdigit() for c in trigger_source):
+        return ''.join(c for c in trigger_source if c.isdigit() or c == '+')
+    return None
 
 
 async def _fire_due_reminders() -> None:
-    """Check for due reminders and push notifications via Gateway."""
+    """Fire due reminders and re-fire unacknowledged ones."""
     now_dt = datetime.now(timezone.utc)
     now = now_dt.isoformat()
     try:
         with engine.connect() as conn:
-            all_active = conn.execute(
-                select(reminders).where(reminders.c.status == "active")
+            pending = conn.execute(
+                select(reminders).where(
+                    reminders.c.status.in_(["active", "awaiting"])
+                )
             ).mappings().all()
 
-        # Compare in Python to handle nextFireAt values with non-UTC offsets.
-        # SQLite string comparison of "+08:00" vs "+00:00" timestamps is unreliable.
         due = []
-        for r in all_active:
+        for r in pending:
             nf = r.get("nextFireAt")
             if not nf:
                 continue
@@ -56,83 +84,64 @@ async def _fire_due_reminders() -> None:
         from services.parser import compute_next_fire
         for r in due:
             reminder_id = r["id"]
-            title = r["title"]
-            body_text = r.get("body") or title
+            status = r["status"]
+            body_text = r.get("body") or r["title"]
             cron = r.get("cronExpression")
             tz_name = r.get("timezone", "UTC")
-            trigger_source = r.get("triggerSource") or ""
-            push_retries = int(r.get("pushRetries") or 0)
+            phone = _extract_phone(r.get("triggerSource") or "")
+            short_name = r.get("shortName") or ""
+            label = f"\U0001f43e {short_name} \u2014 " if short_name else ""
+            total_fires = MAX_ACK_RETRIES + 2   # initial + re-fires
 
-            # Extract phone from triggerSource
-            phone = None
-            if trigger_source and any(c.isdigit() for c in trigger_source):
-                phone = ''.join(c for c in trigger_source if c.isdigit() or c == '+')
-
-            push_ok = True
-            if phone:
-                try:
-                    async with httpx.AsyncClient(timeout=10.0) as client:
-                        short_name = r.get("shortName")
-                        label = f"\U0001f43e {short_name} — " if short_name else ""
-                        await client.post(
-                            f"{GATEWAY_URL}/api/internal/push",
-                            json={
-                                "user_phone": phone,
-                                "message": f"{label}{body_text}",
-                                "source_service": "nudge",
-                                "quick_replies": ["View my reminders"],
-                            },
-                            headers={"X-Alfred-API-Key": NUDGE_API_KEY},
-                        )
-                    logger.info("Fired reminder %s to %s", reminder_id, phone)
-                    push_retries = 0
-                except Exception as exc:
-                    push_ok = False
-                    push_retries += 1
-                    logger.warning(
-                        "Push failed for reminder %s (attempt %d): %s",
-                        reminder_id, push_retries, exc,
-                    )
-
-            # Determine next state
-            if cron and push_ok:
-                # Recurring: schedule next occurrence
-                next_fire = compute_next_fire(cron, tz_name)
-                new_status = "active"
-                updates = dict(status=new_status, lastFiredAt=now, nextFireAt=next_fire,
-                               pushRetries="0", updatedAt=now)
-            elif not push_ok and push_retries <= PUSH_MAX_RETRIES:
-                # Push failed but retries remain — reschedule soon
-                retry_dt = now_dt + timedelta(seconds=PUSH_RETRY_INTERVAL_SECONDS)
-
-                # Check if we're still within the expiry window
-                fire_at_str = r.get("nextFireAt") or r.get("fireAt") or now
-                try:
-                    original_dt = datetime.fromisoformat(fire_at_str)
-                    if original_dt.tzinfo is None:
-                        original_dt = original_dt.replace(tzinfo=timezone.utc)
-                    expired = (now_dt - original_dt).total_seconds() > PUSH_EXPIRY_SECONDS
-                except Exception:
-                    expired = False
-
-                if expired:
-                    logger.warning("Reminder %s push expired after %d retries", reminder_id, push_retries)
-                    updates = dict(status="done", lastFiredAt=now, nextFireAt=None,
-                                   pushRetries=str(push_retries), updatedAt=now)
+            if status == "awaiting":
+                # ── Re-fire: user hasn't acknowledged ────────────────────────
+                ack_retries = int(r.get("ackRetries") or 0) + 1
+                if ack_retries > MAX_ACK_RETRIES:
+                    # Gave up — mark expired
+                    logger.warning("Reminder %s expired after %d re-fires", reminder_id, ack_retries)
+                    updates = dict(status="expired", nextFireAt=None, updatedAt=now)
                 else:
-                    logger.info("Scheduling retry %d for reminder %s at %s",
-                                push_retries, reminder_id, retry_dt.isoformat())
-                    updates = dict(nextFireAt=retry_dt.isoformat(),
-                                   pushRetries=str(push_retries), updatedAt=now)
-            elif not push_ok:
-                # Exhausted retries
-                logger.warning("Reminder %s push exhausted after %d retries", reminder_id, push_retries)
-                updates = dict(status="done", lastFiredAt=now, nextFireAt=None,
-                               pushRetries=str(push_retries), updatedAt=now)
+                    suffix = f" (reminder {ack_retries + 1}/{total_fires})"
+                    if ack_retries == MAX_ACK_RETRIES:
+                        suffix += " \u2014 last reminder"
+                    msg = f"{label}{body_text}{suffix}\nReply \u201cOK\u201d to confirm."
+                    push_ok = await _push(phone, msg, ["\u2713 OK"]) if phone else True
+                    if push_ok:
+                        refire_dt = now_dt + timedelta(seconds=REFIRE_INTERVAL_SECONDS)
+                        updates = dict(ackRetries=str(ack_retries), lastFiredAt=now,
+                                       nextFireAt=refire_dt.isoformat(), updatedAt=now)
+                        logger.info("Re-fired reminder %s (%d/%d) to %s",
+                                    reminder_id, ack_retries, MAX_ACK_RETRIES, phone)
+                    else:
+                        # Push network failure — retry soon without incrementing ackRetries
+                        push_retries = int(r.get("pushRetries") or 0) + 1
+                        retry_dt = now_dt + timedelta(seconds=PUSH_RETRY_INTERVAL_SECONDS)
+                        updates = dict(pushRetries=str(push_retries),
+                                       nextFireAt=retry_dt.isoformat(), updatedAt=now)
+
             else:
-                # One-time, push succeeded (or no phone — fire locally)
-                updates = dict(status="done", lastFiredAt=now, nextFireAt=None,
-                               pushRetries="0", updatedAt=now)
+                # ── Initial fire (status == "active") ────────────────────────
+                push_retries = int(r.get("pushRetries") or 0)
+                msg = f"{label}{body_text}\nReply \u201cOK\u201d to confirm."
+                push_ok = await _push(phone, msg, ["\u2713 OK"]) if phone else True
+
+                if push_ok:
+                    refire_dt = now_dt + timedelta(seconds=REFIRE_INTERVAL_SECONDS)
+                    updates = dict(status="awaiting", firstFiredAt=now, ackRetries="0",
+                                   lastFiredAt=now, nextFireAt=refire_dt.isoformat(),
+                                   pushRetries="0", updatedAt=now)
+                    logger.info("Fired reminder %s to %s — awaiting ack", reminder_id, phone)
+                else:
+                    push_retries += 1
+                    if push_retries <= PUSH_MAX_RETRIES:
+                        retry_dt = now_dt + timedelta(seconds=PUSH_RETRY_INTERVAL_SECONDS)
+                        updates = dict(pushRetries=str(push_retries),
+                                       nextFireAt=retry_dt.isoformat(), updatedAt=now)
+                    else:
+                        logger.warning("Reminder %s push failed %d times — expiring",
+                                       reminder_id, push_retries)
+                        updates = dict(status="expired", lastFiredAt=now, nextFireAt=None,
+                                       pushRetries=str(push_retries), updatedAt=now)
 
             with engine.connect() as conn:
                 conn.execute(

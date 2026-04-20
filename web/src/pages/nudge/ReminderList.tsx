@@ -31,8 +31,9 @@ const TYPE_LABEL: Record<string, string> = {
 const STATUS_COLOR: Record<string, string> = {
   active: "#16a34a",
   paused: "#d97706",
+  awaiting: "#dc2626",
   done: "#6b7280",
-  expired: "#dc2626",
+  expired: "#9ca3af",
 };
 
 // ── Active / Paused row (with manage buttons) ───────────────────────────────
@@ -152,13 +153,56 @@ function FiredRow({ reminder }: { reminder: Reminder }) {
   );
 }
 
+// ── Awaiting-ack row (fired, needs user confirmation) ──────────────────────
+
+function AwaitingRow({ reminder }: { reminder: Reminder }) {
+  const MAX_RETRIES = 3;
+  const ackCount = parseInt(reminder.ackRetries ?? "0", 10);
+  const totalFires = MAX_RETRIES + 2;
+  const fireNum = ackCount + 1; // 1 = initial fire, 2 = first re-fire, …
+  const label = reminder.shortName ? `🐾 ${reminder.shortName}` : reminder.title;
+  const nextRefire = reminder.nextFireAt;
+
+  return (
+    <li style={{ ...styles.item, border: "1.5px solid #fca5a5", background: "#fff5f5" }}>
+      <div style={styles.top}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          {reminder.shortName && (
+            <span style={{ ...styles.petBadge, background: "#fee2e2", color: "#b91c1c" }}>
+              🐾 {reminder.shortName}
+            </span>
+          )}
+          <span style={{ ...styles.title }}>{reminder.title}</span>
+        </div>
+        <span style={{ fontSize: 11, fontWeight: 600, color: "#dc2626", flexShrink: 0 }}>
+          ● awaiting ({fireNum}/{totalFires})
+        </span>
+      </div>
+      <div style={styles.meta}>
+        <span style={styles.typeBadge}>{TYPE_LABEL[reminder.type] ?? reminder.type}</span>
+        <span style={{ fontSize: 12, color: "#6b7280" }}>
+          First fired: {formatTime(reminder.firstFiredAt)}
+        </span>
+        {nextRefire && (
+          <span style={{ fontSize: 12, color: "#ef4444" }}>
+            Re-fire at: {formatTime(nextRefire)}
+          </span>
+        )}
+      </div>
+      <p style={{ fontSize: 12, color: "#b91c1c", margin: 0 }}>
+        Reply "OK" on WhatsApp to confirm {label}.
+      </p>
+    </li>
+  );
+}
+
 // ── Section wrapper ─────────────────────────────────────────────────────────
 
 interface SectionProps {
   title: string;
   reminders: Reminder[];
   onRefresh?: () => void;
-  variant: "active" | "fired";
+  variant: "active" | "awaiting" | "fired";
   emptyText?: string;
 }
 
@@ -178,6 +222,8 @@ export function ReminderSection({ title, reminders, onRefresh, variant, emptyTex
           {reminders.map((r) =>
             variant === "active" ? (
               <ReminderRow key={r.id} reminder={r} onRefresh={onRefresh!} />
+            ) : variant === "awaiting" ? (
+              <AwaitingRow key={r.id} reminder={r} />
             ) : (
               <FiredRow key={r.id} reminder={r} />
             )

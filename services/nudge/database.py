@@ -42,6 +42,8 @@ reminders = Table(
     Column("lastFiredAt", String, nullable=True),
     Column("nextFireAt", String, nullable=True),
     Column("pushRetries", String, nullable=True, default="0"),  # tracks push attempt count
+    Column("ackRetries", String, nullable=True, default="0"),    # re-fire count awaiting user ack
+    Column("firstFiredAt", String, nullable=True),               # when reminder first fired
     Column("createdAt", String, nullable=False),
     Column("updatedAt", String, nullable=False),
 )
@@ -59,6 +61,12 @@ def create_tables():
                 conn.commit()
             if "shortName" not in cols:
                 conn.execute(text('ALTER TABLE reminders ADD COLUMN "shortName" VARCHAR'))
+                conn.commit()
+            if "ackRetries" not in cols:
+                conn.execute(text('ALTER TABLE reminders ADD COLUMN "ackRetries" VARCHAR DEFAULT "0"'))
+                conn.commit()
+            if "firstFiredAt" not in cols:
+                conn.execute(text('ALTER TABLE reminders ADD COLUMN "firstFiredAt" VARCHAR'))
                 conn.commit()
         except Exception:
             pass
