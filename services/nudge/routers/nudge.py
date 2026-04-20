@@ -465,11 +465,20 @@ async def alfred_execute(req: AlfredExecuteRequest):
                                    "body": title},
                       "confidence": 0.5, "rawInterpretation": title}
 
-        now = datetime.now(timezone.utc).isoformat()
-        reminder_id = str(uuid.uuid4())
         parsed = result["reminder"]
         fire_at = parsed.get("fireAt")
         cron = parsed.get("cronExpression")
+
+        # Reject if no time was specified — a reminder without a time is useless
+        if not fire_at and not cron:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                error_code="INSUFFICIENT_DATA",
+                message="When should I remind you? Please include a time, e.g. \"tomorrow at 9am\" or \"every Monday at 8am\".",
+            )
+
+        now = datetime.now(timezone.utc).isoformat()
+        reminder_id = str(uuid.uuid4())
         tz_name = parsed.get("timezone", _DEFAULT_TZ)
         fire_at_utc = _to_utc_iso(fire_at, tz_name)
         next_fire = compute_next_fire(cron, tz_name) if cron else fire_at_utc
