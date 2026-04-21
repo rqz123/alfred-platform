@@ -99,10 +99,8 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
     # ── Fresh request ─────────────────────────────────────────────
     result = detect_intent(text)
     if result is None:
-        _reply(session, conv, phone,
-               "Sorry, I didn't understand that. I can help with expenses, reminders, or your balance — "
-               "try saying something like \"Spent $20 on lunch\" or \"Remind me to call the doctor tomorrow\".",
-               settings)
+        from app.services.chat_service import llm_chat_reply
+        _reply(session, conv, phone, llm_chat_reply(session, msg, settings), settings)
         return
     _handle_fresh(session, conv, phone, msg, result, settings)
 

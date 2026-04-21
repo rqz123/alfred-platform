@@ -65,10 +65,12 @@ async def parse_reminder(input_text: str, timezone_name: str) -> dict:
         f"Current date and time: {current_dt}. User timezone: {timezone_name}.\n\n"
         "Date defaulting rules (apply in order):\n"
         "1. If the user specifies a full date+time, use it exactly.\n"
-        "2. If only a time is given (no date, no weekday), assume TODAY. "
+        "2. If the user says 'tonight' or 'this evening', always use TODAY's date — "
+        "   never move it to tomorrow regardless of the current time.\n"
+        "3. If only a time is given (no date, no weekday, and no 'tonight'/'this evening'), assume TODAY. "
         "   If that time has already passed today, assume TOMORROW instead.\n"
-        "3. If a weekday is given without a date, use the next upcoming occurrence of that weekday.\n"
-        "4. Only return fireAt=null if no time whatsoever can be inferred.\n\n"
+        "4. If a weekday is given without a date, use the next upcoming occurrence of that weekday.\n"
+        "5. Only return fireAt=null if no time whatsoever can be inferred.\n\n"
         "Return valid cron expressions for recurring reminders (use numeric weekdays, e.g. 1=Monday)."
     )
 
