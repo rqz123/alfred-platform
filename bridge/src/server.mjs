@@ -7,7 +7,7 @@ import whatsappWeb from "whatsapp-web.js";
 
 const { Client, LocalAuth, MessageMedia } = whatsappWeb;
 
-dotenv.config();
+dotenv.config({ override: false }); // don't clobber env vars already set by start.sh
 
 const app = express();
 const port = Number(process.env.PORT || 3001);
@@ -146,21 +146,11 @@ function wireClientEvents(session) {
     log("info", "Inbound message forwarded", { sessionId, from: normalizePhone(contact.number || message.from || ""), hasMedia: !!mediaDataUrl });
   });
 
-  client.on("message_create", async (message) => {
-    if (!message.fromMe) return;
-    const contact = await message.getContact().catch(() => null);
-    const mediaDataUrl = await downloadMediaDataUrl(message);
-    await postToBackend("/internal/bridge/outbound", {
-      session_id: sessionId,
-      provider_message_id: message.id._serialized,
-      recipient_phone: normalizePhone(contact?.number || message.to || ""),
-      recipient_name: contact?.pushname || contact?.name || null,
-      message_type: message.type === "chat" ? "text" : message.type,
-      body: message.body || null,
-      media_url: mediaDataUrl,
-    }, "outbound-forward-failed");
-    log("info", "Outbound message forwarded", { sessionId });
-  });
+  // message_create (Alfred's sent messages) is intentionally NOT synced to the gateway.
+  // The gateway already records every outbound message it sends via send_text_via_bridge,
+  // and nudge-originated messages go through /api/internal/push (also tracked by gateway).
+  // Syncing message_create caused duplicate / wrong-contact entries because WhatsApp
+  // uses opaque LID chat IDs (e.g. 101615268835354@lid) that don't match real phone numbers.
 }
 
 function createSession(sessionId) {

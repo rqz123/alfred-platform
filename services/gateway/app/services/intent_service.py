@@ -68,8 +68,9 @@ KEYWORD_MAP = [
     # add_note: \u8bb0\u4e00\u4e0b=note-this, \u7b14\u8bb0=note, \u8bb0\u5f55=record, \u8bb0\u4e2a\u7b14\u8bb0=write-a-note
     (['\u8bb0\u4e00\u4e0b', '\u7b14\u8bb0', '\u8bb0\u5f55', '\u8bb0\u4e2a\u7b14\u8bb0', 'jot', 'write down'],
      'add_note'),
-    # add_reminder: remind/hint/remind/don't-forget/remember/todo + english 'remind'
-    (['\u63d0\u9192', '\u63d0\u793a', 'remind', '\u522b\u5fd8\u4e86', '\u8bb0\u5f97', '\u5f85\u529e'],
+    # add_reminder: remind/hint/don't-forget/remember/todo/alarm/alert/set alarm
+    (['\u63d0\u9192', '\u63d0\u793a', 'remind', '\u522b\u5fd8\u4e86', '\u8bb0\u5f97', '\u5f85\u529e',
+      'alarm', 'alert', 'set alarm', 'wake me', '\u95f9\u949f', '\u8b66\u62a5'],
      'add_reminder'),
     # get_schedule: schedule/what-today/arrangement/calendar
     (['\u65e5\u7a0b', '\u4eca\u5929\u6709\u4ec0\u4e48', '\u5b89\u6392', '\u65e5\u5386'],
@@ -207,7 +208,18 @@ _SYSTEM_PROMPT = (
     "- add_note: user wants to record or save a note or memory\n"
     "- list_notes: user wants to see their recent notes\n"
     "- search_notes: user wants to find or search their notes by topic\n"
-    "- none: message does not match any of the above\n\n"
+    "- none: message does not match any of the above, or the message is incomplete/ambiguous\n\n"
+    "IMPORTANT — completeness rules (return 'none' if not met):\n"
+    "- add_reminder: classify if there is ANY time/date reference (e.g. '9am', 'tomorrow', "
+    "'every Monday', '11:15pm', 'in 30 minutes') OR alarm/reminder language. "
+    "The 'what' can be implicit — 'set 11pm alarm', 'wake me at 7', 'alert at noon' all qualify. "
+    "Only return 'none' if there is NO time and NO alarm/reminder intent at all (e.g. a random word).\n"
+    "- add_expense / add_income: ONLY classify if an amount is explicitly stated "
+    "(e.g. '花了50', 'spent $20'). No amount → 'none'.\n"
+    "- add_note: ONLY classify if there is actual content to save (not just the trigger word alone).\n"
+    "- search_notes: ONLY classify if a search topic or keyword is present.\n"
+    "- cancel_reminder: ONLY classify if a specific reminder is identified (number or name).\n"
+    "- Gibberish or messages with no actionable meaning → 'none'.\n\n"
     "Extract entities when present:\n"
     "- amount: numeric value (e.g. 50.0)\n"
     "- date: 'today', 'yesterday', or 'tomorrow' if mentioned\n"

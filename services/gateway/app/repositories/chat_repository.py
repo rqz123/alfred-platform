@@ -144,12 +144,18 @@ def create_or_get_contact(session: Session, phone_number: str, display_name: str
 
 
 def get_or_create_conversation(session: Session, contact: Contact, connection_id: int | None = None) -> Conversation:
+    # One conversation per contact regardless of which bridge connection delivered it.
     conversation = session.exec(
         select(Conversation)
         .where(Conversation.contact_id == contact.id)
-        .where(Conversation.connection_id == connection_id)
     ).first()
     if conversation is not None:
+        # Keep connection_id up to date if a newer one is provided.
+        if connection_id is not None and conversation.connection_id != connection_id:
+            conversation.connection_id = connection_id
+            session.add(conversation)
+            session.commit()
+            session.refresh(conversation)
         return conversation
 
     conversation = Conversation(contact_id=contact.id, connection_id=connection_id)
@@ -308,4 +314,26 @@ def clear_conversation_messages(session: Session, conversation: Conversation) ->
 
     conversation.updated_at = datetime.now(timezone.utc)
     session.add(conversation)
+    session.commit()
+
+
+def delete_conversation(session: Session, conversation: Conversation) -> None:
+    """Delete all messages then the conversation row itself."""
+    messages = session.exec(
+        select(Message).where(Message.conversation_id == conversation.id)
+    ).all()
+    for message in messages:
+        session.delete(message)
+    session.delete(conversation)
+    session.commit()
+
+
+def delete_all_conversations(session: Session) -> None:
+    """Delete every message and every conversation row."""
+    messages = session.exec(select(Message)).all()
+    for message in messages:
+        session.delete(message)
+    conversations = session.exec(select(Conversation)).all()
+    for conversation in conversations:
+        session.delete(conversation)
     session.commit()

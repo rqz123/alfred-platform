@@ -16,6 +16,8 @@ from app.repositories.auth_repository import get_admin_user
 from app.repositories.chat_repository import (
     assign_provider_message_id,
     clear_conversation_messages,
+    delete_conversation,
+    delete_all_conversations,
     create_or_get_conversation_for_contact,
     create_outbound_message,
     create_outbound_message_for_contact,
@@ -335,6 +337,26 @@ def clear_messages(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@conversation_router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_conversation_endpoint(
+    conversation_id: int,
+    _: TokenPayload = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> Response:
+    conversation = get_conversation_or_404(session, conversation_id)
+    delete_conversation(session, conversation)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@conversation_router.delete("/conversations", status_code=status.HTTP_204_NO_CONTENT)
+def delete_all_conversations_endpoint(
+    _: TokenPayload = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> Response:
+    delete_all_conversations(session)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @internal_router.post("/internal/bridge/messages", status_code=status.HTTP_204_NO_CONTENT)
 def receive_bridge_message(
     payload: BridgeInboundMessage,
@@ -345,6 +367,21 @@ def receive_bridge_message(
     if x_bridge_key != settings.bridge_api_key:
         logger.warning("Rejected inbound bridge message due to invalid bridge key")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid bridge key")
+
+    # Skip messages where Alfred's own WhatsApp number is the sender — these
+    # are self-messages (e.g. the phone receiving its own sent notification)
+    # and should never create a contact or trigger a dispatch.
+    try:
+        bridge_sessions = list_bridge_sessions()
+        alfred_phone = next(
+            (s.get("connected_phone") for s in bridge_sessions if s.get("id") == payload.session_id),
+            None,
+        )
+        if alfred_phone and payload.sender_phone == alfred_phone:
+            logger.debug("Skipping self-message from Alfred's own number %s", alfred_phone)
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+    except Exception:
+        pass  # if bridge is unreachable, process the message anyway
 
     logger.info(
         "Inbound bridge message received: session=%s sender=%s type=%s provider_message_id=%s",

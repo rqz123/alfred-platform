@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import asyncio
 import logging
 import os
 
@@ -20,12 +21,14 @@ from app.core.logging import configure_logging
 from app.db.seed import seed_data
 from app.db.session import get_session, init_db
 from app.repositories.connection_repository import list_connections
-from app.services.bridge_service import create_bridge_session
+from app.services.bridge_service import create_bridge_session, list_bridge_sessions
 from app.services.media_service import ensure_media_dir
 
 
 configure_logging()
 logger = logging.getLogger("alfred.app")
+
+_WATCHDOG_INTERVAL = 30  # seconds between bridge session health checks
 
 
 @asynccontextmanager
@@ -35,12 +38,15 @@ async def lifespan(_: FastAPI):
     seed_data()
     ensure_media_dir()
     _reinit_bridge_sessions()
+    task = asyncio.create_task(_bridge_watchdog())
     logger.info("Alfred backend startup complete")
     yield
+    task.cancel()
     logger.info("Stopping Alfred backend")
 
 
 def _reinit_bridge_sessions() -> None:
+    """Called once at startup to restore bridge sessions from DB."""
     try:
         with next(get_session()) as session:
             connections = list_connections(session)
@@ -52,6 +58,35 @@ def _reinit_bridge_sessions() -> None:
                 logger.warning("Could not re-initialize bridge session %s: %s", conn.bridge_session_id, exc)
     except Exception as exc:
         logger.warning("Bridge session re-init skipped: %s", exc)
+
+
+async def _bridge_watchdog() -> None:
+    """
+    Background loop: every 30 s, check that every DB connection has a live
+    session on the bridge. If the bridge restarted and lost its in-memory
+    sessions, recreate them automatically so messages keep flowing.
+    """
+    await asyncio.sleep(_WATCHDOG_INTERVAL)  # let startup settle first
+    while True:
+        try:
+            live_ids = {s["id"] for s in list_bridge_sessions()}
+            with next(get_session()) as session:
+                connections = list_connections(session)
+            for conn in connections:
+                if conn.bridge_session_id not in live_ids:
+                    logger.warning(
+                        "Bridge session %s missing — recreating", conn.bridge_session_id
+                    )
+                    try:
+                        create_bridge_session(conn.bridge_session_id)
+                        logger.info("Bridge session %s recreated", conn.bridge_session_id)
+                    except Exception as exc:
+                        logger.warning("Failed to recreate bridge session %s: %s", conn.bridge_session_id, exc)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("Bridge watchdog error: %s", exc)
+        await asyncio.sleep(_WATCHDOG_INTERVAL)
 
 
 settings = get_settings()

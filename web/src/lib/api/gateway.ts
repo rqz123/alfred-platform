@@ -157,9 +157,19 @@ export function sendImage(token: string, conversationId: number, file: File, cap
 export function clearConversation(token: string, conversationId: number) {
   return apiRequest<void>(
     `/conversations/${conversationId}/messages`,
-    {
-      method: "DELETE",
-    },
+    { method: "DELETE" },
     token
   );
+}
+
+export function deleteConversation(token: string, conversationId: number) {
+  return apiRequest<void>(
+    `/conversations/${conversationId}`,
+    { method: "DELETE" },
+    token
+  );
+}
+
+export function deleteAllConversations(token: string) {
+  return apiRequest<void>("/conversations", { method: "DELETE" }, token);
 }

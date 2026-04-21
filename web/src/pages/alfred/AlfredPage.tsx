@@ -17,6 +17,8 @@ import {
   createConnection,
   createConversation,
   deleteConnection,
+  deleteConversation,
+  deleteAllConversations,
   fetchConnections,
   fetchConversations,
   fetchMessages,
@@ -24,15 +26,12 @@ import {
   sendMessage,
 } from "../../lib/api/gateway";
 
+type SubTab = "conversations" | "settings";
+
 export default function AlfredPage() {
   const token = localStorage.getItem("alfred_token") ?? "";
-  const username = (() => {
-    try {
-      const raw = localStorage.getItem("alfred_user");
-      return raw ? (JSON.parse(raw) as { username: string }).username : "";
-    } catch { return ""; }
-  })();
 
+  const [subTab, setSubTab] = useState<SubTab>("conversations");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -100,9 +99,29 @@ export default function AlfredPage() {
     await loadConversations(token);
   }
 
+  async function handleDeleteConversation(id: number) {
+    if (!token) return;
+    if (!confirm("Delete this conversation and all its messages?")) return;
+    await deleteConversation(token, id);
+    if (activeConversationId === id) {
+      setActiveConversationId(null);
+      setMessages([]);
+    }
+    await loadConversations(token);
+  }
+
+  async function handleDeleteAll() {
+    if (!token) return;
+    if (!confirm("Delete ALL conversations? This cannot be undone.")) return;
+    await deleteAllConversations(token);
+    setActiveConversationId(null);
+    setMessages([]);
+    setConversations([]);
+  }
+
   async function handleCreateConnection() {
     if (!token) return;
-    const label = window.prompt("Optional label (e.g. \"My iPhone\")") ?? undefined;
+    const label = window.prompt("Label for this connection (optional):") ?? undefined;
     try { await createConnection(token, label); await loadConnections(token); }
     catch (e) { setChatError(e instanceof Error ? e.message : "Failed"); }
   }
@@ -118,36 +137,91 @@ export default function AlfredPage() {
     const phone = window.prompt("Phone number (with country code):");
     if (!phone) return;
     const name = window.prompt("Contact name (optional)") || undefined;
-    const msg = window.prompt("Initial message (optional)") || undefined;
     try {
       const convo = await createConversation(token, { phone_number: phone, contact_name: name });
       setActiveConversationId(convo.id);
       setChatError(null);
-      if (msg) { const m = await sendMessage(token, convo.id, msg); setMessages([m]); }
       await loadConversations(token);
     } catch (e) { setChatError(e instanceof Error ? e.message : "Failed"); }
   }
 
+  const activeConv = conversations.find((c) => c.id === activeConversationId) ?? null;
+  const connectedConn = connections.find((c) => c.status === "connected") ?? null;
+
   return (
     <main className="app-shell">
-      <ConversationList
-        conversations={conversations}
-        activeConversationId={activeConversationId}
-        onSelect={setActiveConversationId}
-        onCreateConversation={handleCreateConversation}
-      />
+      {/* ── Left sidebar: tab switcher + per-tab content ── */}
+      <aside className="sidebar" style={{ display: "flex", flexDirection: "column" }}>
+        {/* Sub-tabs */}
+        <div style={{
+          display: "flex",
+          borderBottom: "1px solid #e5e7eb",
+          flexShrink: 0,
+        }}>
+          {(["conversations", "settings"] as SubTab[]).map((t) => (
+            <button
+              key={t}
+              onClick={() => setSubTab(t)}
+              style={{
+                flex: 1,
+                background: "none",
+                border: "none",
+                borderBottom: subTab === t ? "2px solid #6366f1" : "2px solid transparent",
+                padding: "10px 4px",
+                fontSize: 13,
+                fontWeight: subTab === t ? 600 : 400,
+                color: subTab === t ? "#6366f1" : "#6b7280",
+                cursor: "pointer",
+                textTransform: "capitalize",
+              }}
+            >
+              {t === "conversations" ? "Conversations" : "Settings"}
+            </button>
+          ))}
+        </div>
+
+        {subTab === "conversations" ? (
+          <ConversationList
+            conversations={conversations}
+            activeConversationId={activeConversationId}
+            onSelect={(id) => { setActiveConversationId(id); }}
+            onCreateConversation={handleCreateConversation}
+            onDeleteConversation={handleDeleteConversation}
+            onDeleteAll={handleDeleteAll}
+          />
+        ) : (
+          <div style={{ flex: 1, overflowY: "auto", padding: "1rem" }}>
+            <ConnectionPanel
+              connections={connections}
+              onCreateConnection={handleCreateConnection}
+              onDeleteConnection={handleDeleteConnection}
+            />
+          </div>
+        )}
+      </aside>
+
+      {/* ── Right panel: chat ── */}
       <section className="chat-panel">
         <header className="chat-header">
           <div>
-            <p className="eyebrow">Signed in as</p>
-            <h1>{username}</h1>
+            {activeConv ? (
+              <>
+                <p className="eyebrow">{activeConv.phone_number}</p>
+                <h1>{activeConv.contact_name}</h1>
+              </>
+            ) : connectedConn ? (
+              <>
+                <p className="eyebrow">Connected</p>
+                <h1>{connectedConn.connected_name ?? "Alfred"}</h1>
+              </>
+            ) : (
+              <>
+                <p className="eyebrow">WhatsApp</p>
+                <h1>No conversation selected</h1>
+              </>
+            )}
           </div>
         </header>
-        <ConnectionPanel
-          connections={connections}
-          onCreateConnection={handleCreateConnection}
-          onDeleteConnection={handleDeleteConnection}
-        />
         {chatError ? <p className="error-banner">{chatError}</p> : null}
         <MessageList messages={messages} />
         <Composer

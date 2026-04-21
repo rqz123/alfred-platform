@@ -22,7 +22,7 @@ import httpx
 from sqlmodel import Session
 
 from app.core.config import get_settings
-from app.models.chat import Contact, Conversation, WhatsAppConnection
+from app.models.chat import Contact, Conversation, Message, WhatsAppConnection
 from app.schemas.chat import MessageRead
 from app.services.bridge_service import send_text_via_bridge
 from app.services.intent_service import detect_intent, extract_entities
@@ -293,16 +293,35 @@ def _reply(
     text: str,
     settings,
 ) -> None:
-    """Send plain text back to the user via bridge or Cloud API."""
+    """Send plain text back to the user via bridge or Cloud API, and persist it."""
+    provider_message_id: str | None = None
     if settings.whatsapp_mode == 'bridge' and conv.connection_id:
         conn = session.get(WhatsAppConnection, conv.connection_id)
         if conn:
             try:
-                send_text_via_bridge(conn.bridge_session_id, phone, text)
+                provider_message_id = send_text_via_bridge(conn.bridge_session_id, phone, text)
             except Exception as exc:
                 logger.error('Bridge reply failed for %s: %s', phone, exc)
     else:
         _send_cloud_reply(phone, text, settings)
+
+    # Persist the outbound reply in the conversation so it appears in the UI.
+    try:
+        from datetime import datetime, timezone
+        msg = Message(
+            conversation_id=conv.id,
+            provider_message_id=provider_message_id,
+            direction='outbound',
+            message_type='text',
+            body=text,
+            delivery_status='sent' if provider_message_id else 'queued',
+        )
+        session.add(msg)
+        conv.updated_at = datetime.now(timezone.utc)
+        session.add(conv)
+        session.commit()
+    except Exception as exc:
+        logger.warning('Failed to persist outbound reply: %s', exc)
 
 
 def _send_cloud_reply(recipient_phone: str, body: str, settings) -> None:

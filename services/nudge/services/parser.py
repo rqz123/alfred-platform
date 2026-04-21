@@ -61,9 +61,15 @@ async def parse_reminder(input_text: str, timezone_name: str) -> dict:
 
     system_prompt = (
         "You are a reminder parser. Given a natural language reminder description "
-        "and the user's timezone, extract the structured reminder fields. "
-        "Return valid cron expressions for recurring reminders (use numeric weekdays, e.g. 1 for Monday). "
-        f"Today's date and time: {current_dt}. User timezone: {timezone_name}."
+        "and the user's current date/time and timezone, extract the structured reminder fields.\n"
+        f"Current date and time: {current_dt}. User timezone: {timezone_name}.\n\n"
+        "Date defaulting rules (apply in order):\n"
+        "1. If the user specifies a full date+time, use it exactly.\n"
+        "2. If only a time is given (no date, no weekday), assume TODAY. "
+        "   If that time has already passed today, assume TOMORROW instead.\n"
+        "3. If a weekday is given without a date, use the next upcoming occurrence of that weekday.\n"
+        "4. Only return fireAt=null if no time whatsoever can be inferred.\n\n"
+        "Return valid cron expressions for recurring reminders (use numeric weekdays, e.g. 1=Monday)."
     )
 
     response = await get_client().chat.completions.create(
