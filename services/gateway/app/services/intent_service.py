@@ -182,8 +182,9 @@ _INTENT_SCHEMA = {
                     "date":     {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "category": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "title":    {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "content":  {"anyOf": [{"type": "string"}, {"type": "null"}]},
                 },
-                "required": ["amount", "date", "category", "title"],
+                "required": ["amount", "date", "category", "title", "content"],
                 "additionalProperties": False,
             },
         },
@@ -233,6 +234,9 @@ _SYSTEM_PROMPT = (
     "    'other' (anything that does not fit the above)\n"
     "  Use null only if no category can be inferred at all.\n"
     "- title: reminder content text for add_reminder; or the reference (number or name) for cancel_reminder — put it in title\n"
+    "- content: the full text the user wants to save for add_note / add_note intents — "
+    "capture everything after the trigger word (e.g. 'Note', '记一下', '笔记') as content; "
+    "use null for all other intents\n"
     "Set confidence between 0 and 1. Use null for entities that are not present."
 )
 
