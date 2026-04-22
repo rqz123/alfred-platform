@@ -81,8 +81,17 @@ echo ""
 echo "Waiting for services to initialize..."
 sleep 8
 
+# Bridge can take longer to start (Node.js cold start) — retry for up to 20s
+BRIDGE_UP=0
+for i in $(seq 1 10); do
+  if curl -sf http://127.0.0.1:3001/health > /dev/null 2>&1; then
+    BRIDGE_UP=1; break
+  fi
+  sleep 2
+done
+
 FAILED=0
-curl -sf http://127.0.0.1:3001/health              > /dev/null 2>&1 || { echo "  ✗ bridge  failed — check .logs/bridge.log";   FAILED=1; }
+[ $BRIDGE_UP -eq 1 ] || { echo "  ✗ bridge  failed — check .logs/bridge.log";   FAILED=1; }
 curl -sf http://127.0.0.1:8000/docs                > /dev/null 2>&1 || { echo "  ✗ gateway failed — check .logs/gateway.log";  FAILED=1; }
 curl -sf http://127.0.0.1:8001/api/ourcents/health > /dev/null 2>&1 || { echo "  ✗ ourcents failed — check .logs/ourcents.log"; FAILED=1; }
 curl -sf http://127.0.0.1:8002/api/nudge/health    > /dev/null 2>&1 || { echo "  ✗ nudge   failed — check .logs/nudge.log";    FAILED=1; }
