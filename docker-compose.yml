@@ -6,6 +6,7 @@ networks:
 
 volumes:
   alfred-data:   # shared persistent storage for all services
+  wwebjs-auth:   # persists WhatsApp session across bridge container rebuilds
 
 services:
 
@@ -19,15 +20,17 @@ services:
     env_file: .env
     environment:
       BACKEND_BASE_URL: http://gateway:8000/api
+    volumes:
+      - wwebjs-auth:/bridge/.wwebjs_auth
     networks:
       - alfred-net
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3001/sessions"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:3001/health"]
       interval: 30s
       timeout: 10s
-      retries: 3
-      start_period: 20s
+      retries: 5
+      start_period: 30s
 
   # ── OurCents (expense tracker) ─────────────────────────────────
   ourcents:
