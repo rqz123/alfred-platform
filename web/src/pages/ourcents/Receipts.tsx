@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { listReceipts, getReceipt, confirmReceipt } from "../../lib/api/ourcents";
+import { listReceipts, getReceipt, confirmReceipt, deleteReceipt } from "../../lib/api/ourcents";
 
 const OURCENTS_BASE = `${window.location.protocol}//${window.location.hostname}:8001`;
 const CATEGORIES = ["food", "transportation", "healthcare", "shopping", "entertainment", "utilities", "tools", "other"];
@@ -135,6 +135,22 @@ export default function Receipts() {
       .finally(() => setDetailLoading(false));
   }
 
+  async function handleDelete() {
+    if (!selected) return;
+    if (!confirm(`Delete receipt from ${selected.merchant_name}? This cannot be undone.`)) return;
+    setSaving(true);
+    try {
+      await deleteReceipt(selected.id);
+      setSelected(null);
+      setDetail(null);
+      loadReceipts();
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed to delete");
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function handleConfirm(markAs?: string) {
     if (!selected) return;
     setSaving(true);
@@ -218,8 +234,14 @@ export default function Receipts() {
               <span style={{ fontWeight: 700, fontSize: "1rem" }}>{selected.merchant_name}</span>
               <StatusBadge status={selected.status} style={{ marginLeft: 8 }} />
             </div>
-            <button onClick={() => { setSelected(null); setDetail(null); }}
-              style={{ background: "none", border: "none", cursor: "pointer", fontSize: "1.1rem", color: "#94a3b8" }}>✕</button>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+              <button onClick={handleDelete} disabled={saving}
+                style={{ padding: "0.3rem 0.7rem", background: "none", border: "1px solid #fca5a5", color: "#dc2626", borderRadius: 4, cursor: "pointer", fontSize: "0.8rem" }}>
+                Delete
+              </button>
+              <button onClick={() => { setSelected(null); setDetail(null); }}
+                style={{ background: "none", border: "none", cursor: "pointer", fontSize: "1.1rem", color: "#94a3b8" }}>✕</button>
+            </div>
           </div>
 
           {/* Two-column body */}

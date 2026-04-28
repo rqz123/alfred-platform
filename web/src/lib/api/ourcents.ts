@@ -105,6 +105,10 @@ export function confirmReceipt(id: number, body: Record<string, unknown>) {
   });
 }
 
+export function deleteReceipt(id: number) {
+  return request<void>(`/api/ourcents/receipts/${id}`, { method: "DELETE" });
+}
+
 export function getRules() {
   return request<Record<string, unknown>>("/api/ourcents/settings/rules");
 }

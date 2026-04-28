@@ -336,6 +336,36 @@ def confirm_receipt(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
 
+@router.delete("/receipts/{receipt_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_receipt(
+    receipt_id: int,
+    payload: TokenPayload = Depends(verify_token),
+    db=Depends(get_db),
+    file_storage=Depends(get_file_storage),
+):
+    family_id = payload.family_id
+    if family_id is None:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No family context in token")
+    with db.get_connection() as conn:
+        row = conn.execute(
+            "SELECT id, upload_file_id FROM receipts WHERE id = ? AND family_id = ?",
+            (receipt_id, family_id),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Receipt not found")
+        upload_file_id = row["upload_file_id"]
+        # ON DELETE CASCADE removes receipt_items and receipt_deductions automatically.
+        conn.execute("DELETE FROM receipts WHERE id = ?", (receipt_id,))
+        if upload_file_id:
+            file_row = conn.execute(
+                "SELECT storage_path FROM upload_files WHERE id = ?", (upload_file_id,)
+            ).fetchone()
+            conn.execute("DELETE FROM upload_files WHERE id = ?", (upload_file_id,))
+            if file_row and file_row["storage_path"]:
+                file_storage.delete_file(file_row["storage_path"])
+        conn.commit()
+
+
 # ─────────────────────────────────────────────────────
 # Settings — classification rules
 # ─────────────────────────────────────────────────────
