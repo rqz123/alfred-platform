@@ -23,7 +23,15 @@ app/schemas/chat.py
 app/schemas/connection.py
 app/services/auth_service.py
 app/services/bridge_service.py
+app/services/chat_service.py
+app/services/dispatch_service.py
+app/services/intent_service.py
 app/services/media_service.py
+app/services/pending_sessions.py
+app/services/service_registry.py
 app/services/stt_service.py
 app/services/tts_service.py
 app/services/whatsapp_service.py
+tests/test_intent_service.py
+tests/test_pending_sessions.py
+tests/test_push_bootstrap.py
