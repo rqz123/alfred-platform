@@ -1,11 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  PhoneBinding,
-  listPhoneBindings,
-  bindPhone,
-  unbindPhone,
-} from "../lib/api/ourcents";
-import {
   AlfredUser,
   AlfredFamily,
   WaConnection,
@@ -20,6 +14,8 @@ import {
 export default function SettingsPage() {
   const alfredToken = localStorage.getItem("alfred_token");
   const isAdmin = !!alfredToken;
+
+  // ── My Account (Alfred) ────────────────────────────────────
   const [alfredPhone, setAlfredPhone] = useState(localStorage.getItem("alfred_admin_phone") ?? "");
   const [phoneInput, setPhoneInput] = useState("");
   const [phoneMsg, setPhoneMsg] = useState("");
@@ -44,7 +40,6 @@ export default function SettingsPage() {
         setAlfredFamily(detail);
         setFamilyMembers(detail.members);
       } else if (user.family_id) {
-        // non-admin: just show family via resolve (no detail endpoint without admin)
         setAlfredFamily({ id: user.family_id, name: "My Family", created_by: null, created_at: "", updated_at: "" });
       }
     } catch { /* not yet bootstrapped */ }
@@ -61,7 +56,7 @@ export default function SettingsPage() {
     try {
       const resolved = await alfredResolve(phoneInput.trim());
       if (!resolved) {
-        setPhoneErr("Phone not found in Alfred — ask an admin to add it first, or run Bootstrap.");
+        setPhoneErr("Phone not found — ask an admin to add it first via the Admin Panel.");
         return;
       }
       const phone = phoneInput.trim();
@@ -91,8 +86,8 @@ export default function SettingsPage() {
     }
   }
 
-  // ── Bot state ──────────────────────────────────────────────
-  const [conn, setConn] = useState<WaConnection | null | undefined>(undefined); // undefined = loading
+  // ── Alfred Bot ─────────────────────────────────────────────
+  const [conn, setConn] = useState<WaConnection | null | undefined>(undefined);
   const [connError, setConnError] = useState("");
   const [connWorking, setConnWorking] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -128,7 +123,6 @@ export default function SettingsPage() {
     try {
       await createConnection(alfredToken, "Alfred Bot");
       await loadConn();
-      // Start polling until connected
       stopPoll();
       pollRef.current = setInterval(loadConn, 3000);
     } catch (e: unknown) {
@@ -154,67 +148,17 @@ export default function SettingsPage() {
     }
   }
 
-  // ── Phone binding state ────────────────────────────────────
-  const [bindings, setBindings] = useState<PhoneBinding[]>([]);
-  const [bindLoading, setBindLoading] = useState(true);
-  const [bindError, setBindError] = useState("");
-  const [phone, setPhone] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [saveMsg, setSaveMsg] = useState("");
-
-  function loadBindings() {
-    setBindLoading(true);
-    setBindError("");
-    listPhoneBindings()
-      .then(setBindings)
-      .catch((e: Error) => setBindError(e.message))
-      .finally(() => setBindLoading(false));
-  }
-
-  useEffect(loadBindings, []);
-
-  async function handleBind(e: React.FormEvent) {
-    e.preventDefault();
-    if (!phone.trim()) return;
-    setSaving(true);
-    setSaveMsg("");
-    setBindError("");
-    try {
-      await bindPhone(phone.trim());
-      setPhone("");
-      setSaveMsg("Phone number bound successfully.");
-      loadBindings();
-    } catch (e: unknown) {
-      setBindError(e instanceof Error ? e.message : "Failed to bind phone.");
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function handleUnbind(p: string) {
-    if (!confirm(`Remove binding for +${p}?`)) return;
-    setBindError("");
-    try {
-      await unbindPhone(p);
-      loadBindings();
-    } catch (e: unknown) {
-      setBindError(e instanceof Error ? e.message : "Failed to remove binding.");
-    }
-  }
-
-  const botPhone = conn?.connected_phone ?? null;
-
   return (
     <div style={{ padding: "1.5rem", maxWidth: 620 }}>
       <h2 style={{ marginTop: 0 }}>Settings</h2>
 
-      {/* ── Section 0: My Account ────────────────────────────── */}
+      {/* ── My Account ──────────────────────────────────────── */}
       <section style={sectionStyle}>
         <h3 style={{ marginTop: 0 }}>My Account</h3>
         {!alfredPhone ? (
           <>
             <p style={{ color: "#64748b", fontSize: "0.9rem", marginTop: 0 }}>
-              Link your Alfred phone number to access account features.
+              Enter your WhatsApp number to link your account.
             </p>
             <form onSubmit={handleLinkPhone} style={{ display: "flex", gap: "0.5rem" }}>
               <input
@@ -276,7 +220,7 @@ export default function SettingsPage() {
         )}
       </section>
 
-      {/* ── My Family (read-only) ────────────────────────────── */}
+      {/* ── My Family ───────────────────────────────────────── */}
       {alfredMe?.family_id && (
         <section style={sectionStyle}>
           <h3 style={{ marginTop: 0 }}>My Family</h3>
@@ -310,7 +254,7 @@ export default function SettingsPage() {
         </section>
       )}
 
-      {/* ── Section 1: Alfred Bot (admin only) ──────────────── */}
+      {/* ── Alfred Bot (admin only) ──────────────────────────── */}
       {isAdmin && (
         <section style={sectionStyle}>
           <h3 style={{ marginTop: 0 }}>Alfred Bot</h3>
@@ -375,98 +319,6 @@ export default function SettingsPage() {
           )}
         </section>
       )}
-
-      {/* ── Section 2: Add User WhatsApp Number ─────────────── */}
-      <section style={sectionStyle}>
-        <h3 style={{ marginTop: 0 }}>Add User WhatsApp Number</h3>
-        <p style={{ color: "#64748b", fontSize: "0.9rem", marginTop: 0 }}>
-          Register a user's WhatsApp number so Alfred can send reminders and
-          recognize their messages. Use the international format, e.g. <code>+14081234567</code>.
-        </p>
-
-        <form onSubmit={handleBind} style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
-          <input
-            type="tel"
-            value={phone}
-            onChange={(e) => setPhone(e.target.value)}
-            placeholder="+14081234567"
-            disabled={saving}
-            style={inputStyle}
-          />
-          <button type="submit" disabled={saving || !phone.trim()} style={btnStyle}>
-            {saving ? "Saving…" : "Save"}
-          </button>
-        </form>
-
-        {saveMsg && <p style={{ color: "#16a34a", fontSize: "0.9rem" }}>{saveMsg}</p>}
-        {bindError && <p style={{ color: "#dc2626", fontSize: "0.9rem" }}>{bindError}</p>}
-
-        {bindLoading ? (
-          <p style={{ color: "#64748b", fontSize: "0.9rem" }}>Loading…</p>
-        ) : bindings.filter((b) => {
-          try {
-            const me = JSON.parse(localStorage.getItem("ourcents_user") ?? "{}");
-            return b.username === me.username;
-          } catch { return false; }
-        }).map((b) => (
-          <div key={b.id} style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.5rem" }}>
-            <code style={codeStyle}>+{b.phone}</code>
-            <button onClick={() => handleUnbind(b.phone)} style={deleteBtnStyle}>Remove</button>
-          </div>
-        ))}
-      </section>
-
-      {/* ── Section 3: Family Members ────────────────────────── */}
-      <section style={sectionStyle}>
-        <h3 style={{ marginTop: 0 }}>Family Members</h3>
-        <p style={{ color: "#64748b", fontSize: "0.9rem", marginTop: 0 }}>
-          Everyone in your family who has connected their WhatsApp to Alfred.
-        </p>
-
-        {/* Invite instructions */}
-        <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: 6, padding: "0.75rem 1rem", marginBottom: "1rem", fontSize: "0.875rem", color: "#475569" }}>
-          <strong>To invite someone:</strong>
-          <ol style={{ margin: "0.4rem 0 0", paddingLeft: "1.25rem", lineHeight: 1.8 }}>
-            <li>
-              Share Alfred's WhatsApp number:{" "}
-              {botPhone
-                ? <code style={codeStyle}>+{botPhone}</code>
-                : <span style={{ color: "#94a3b8" }}>— (bot not connected)</span>}
-            </li>
-            <li>Ask them to add it to WhatsApp contacts and send a message.</li>
-            <li>Have them register on this app and add their number in <em>Add User WhatsApp Number</em> above.</li>
-          </ol>
-        </div>
-
-        {bindLoading ? (
-          <p style={{ color: "#64748b", fontSize: "0.9rem" }}>Loading…</p>
-        ) : bindings.length === 0 ? (
-          <p style={{ color: "#94a3b8", fontSize: "0.9rem" }}>No members connected yet.</p>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
-            <thead>
-              <tr style={{ borderBottom: "1px solid #e2e8f0", textAlign: "left" }}>
-                <th style={thStyle}>Phone</th>
-                <th style={thStyle}>User</th>
-                <th style={thStyle}>Bound at</th>
-                <th style={thStyle}></th>
-              </tr>
-            </thead>
-            <tbody>
-              {bindings.map((b) => (
-                <tr key={b.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                  <td style={tdStyle}><code style={codeStyle}>+{b.phone}</code></td>
-                  <td style={tdStyle}>{b.username}</td>
-                  <td style={tdStyle}>{new Date(b.created_at).toLocaleDateString()}</td>
-                  <td style={tdStyle}>
-                    <button onClick={() => handleUnbind(b.phone)} style={deleteBtnStyle}>Remove</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
     </div>
   );
 }
@@ -501,15 +353,6 @@ const dangerBtnStyle: React.CSSProperties = {
   background: "none",
   border: "1px solid #fca5a5",
   color: "#dc2626",
-};
-const deleteBtnStyle: React.CSSProperties = {
-  padding: "0.25rem 0.6rem",
-  background: "none",
-  border: "1px solid #fca5a5",
-  color: "#dc2626",
-  borderRadius: 4,
-  cursor: "pointer",
-  fontSize: "0.8rem",
 };
 const codeStyle: React.CSSProperties = {
   background: "#f8fafc",

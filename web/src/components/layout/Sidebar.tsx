@@ -30,7 +30,7 @@ export default function Sidebar() {
   const visibleItems = NAV_ITEMS.filter((item) => !("adminOnly" in item && item.adminOnly && !isAdmin));
   const username = (() => {
     try {
-      const raw = localStorage.getItem("alfred_user") ?? localStorage.getItem("ourcents_user");
+      const raw = localStorage.getItem("alfred_user");
       return raw ? (JSON.parse(raw) as { username: string }).username : "admin";
     } catch { return "admin"; }
   })();
@@ -38,8 +38,7 @@ export default function Sidebar() {
   function handleLogout() {
     localStorage.removeItem("alfred_token");
     localStorage.removeItem("alfred_user");
-    localStorage.removeItem("ourcents_token");
-    localStorage.removeItem("ourcents_user");
+    localStorage.removeItem("alfred_admin_phone");
     navigate("/login");
   }
 
