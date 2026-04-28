@@ -132,6 +132,23 @@ export default function SettingsPage() {
     }
   }
 
+  async function handleReconnect() {
+    if (!alfredToken || !conn) return;
+    setConnWorking(true);
+    setConnError("");
+    try {
+      await deleteConnection(alfredToken, conn.id);
+      await createConnection(alfredToken, "Alfred Bot");
+      await loadConn();
+      stopPoll();
+      pollRef.current = setInterval(loadConn, 3000);
+    } catch (e: unknown) {
+      setConnError(e instanceof Error ? e.message : "Failed to reconnect.");
+    } finally {
+      setConnWorking(false);
+    }
+  }
+
   async function handleDisconnect() {
     if (!alfredToken || !conn) return;
     if (!confirm("Disconnect Alfred's WhatsApp bot? Reminders and incoming messages will stop working.")) return;
@@ -276,6 +293,20 @@ export default function SettingsPage() {
               </span>
               <button onClick={handleSetupBot} disabled={connWorking} style={btnStyle}>
                 {connWorking ? "Setting up…" : "Set Up Bot"}
+              </button>
+            </div>
+          )}
+
+          {conn && conn.status === "offline" && (
+            <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+              <span style={{ color: "#92400e", fontSize: "0.9rem" }}>
+                ⚠ Bot is offline — click Reconnect to get a new QR code.
+              </span>
+              <button onClick={handleReconnect} disabled={connWorking} style={btnStyle}>
+                {connWorking ? "Reconnecting…" : "Reconnect"}
+              </button>
+              <button onClick={handleDisconnect} disabled={connWorking} style={dangerBtnStyle}>
+                Remove
               </button>
             </div>
           )}
