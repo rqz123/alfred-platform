@@ -376,13 +376,12 @@ export default function SettingsPage() {
         </section>
       )}
 
-      {/* ── Section 2: My WhatsApp Number ───────────────────── */}
+      {/* ── Section 2: Add User WhatsApp Number ─────────────── */}
       <section style={sectionStyle}>
-        <h3 style={{ marginTop: 0 }}>My WhatsApp Number</h3>
+        <h3 style={{ marginTop: 0 }}>Add User WhatsApp Number</h3>
         <p style={{ color: "#64748b", fontSize: "0.9rem", marginTop: 0 }}>
-          Add your personal WhatsApp number. Alfred will send you reminders here,
-          and recognize your messages when you chat with the bot.
-          Use the international format, e.g. <code>+14081234567</code>.
+          Register a user's WhatsApp number so Alfred can send reminders and
+          recognize their messages. Use the international format, e.g. <code>+14081234567</code>.
         </p>
 
         <form onSubmit={handleBind} style={{ display: "flex", gap: "0.5rem", marginBottom: "1rem" }}>
@@ -435,7 +434,7 @@ export default function SettingsPage() {
                 : <span style={{ color: "#94a3b8" }}>— (bot not connected)</span>}
             </li>
             <li>Ask them to add it to WhatsApp contacts and send a message.</li>
-            <li>Have them register on this app and add their number in <em>My WhatsApp Number</em> above.</li>
+            <li>Have them register on this app and add their number in <em>Add User WhatsApp Number</em> above.</li>
           </ol>
         </div>
 
