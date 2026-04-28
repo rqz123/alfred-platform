@@ -65,6 +65,23 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
         return
     phone = contact.phone_number
 
+    # ── Identity check ─────────────────────────────────────────────
+    # Only enforced once alfred_users has been bootstrapped.
+    from app.repositories.account_repository import get_user_by_phone, has_any_user
+    if has_any_user(session) and get_user_by_phone(session, phone) is None:
+        _reply(session, conv, phone, '您的号码尚未注册，请联系管理员。', settings)
+        return
+
+    # ── Bot commands / pending confirmations ───────────────────────
+    # Checked for all non-empty text messages before intent detection.
+    text_for_bot = (msg.transcript or msg.body or '').strip()
+    if text_for_bot:
+        from app.services.account_bot_service import handle_bot_command
+        bot_reply = handle_bot_command(session, phone, text_for_bot)
+        if bot_reply is not None:
+            _reply(session, conv, phone, bot_reply, settings)
+            return
+
     # ── Image message → receipt processing (no text required) ─────
     if msg.message_type == "image" and msg.media_url:
         _handle_image(session, conv, phone, msg, settings)

@@ -6,7 +6,12 @@ import {
   unbindPhone,
 } from "../lib/api/ourcents";
 import {
+  AlfredUser,
+  AlfredFamily,
   WaConnection,
+  alfredResolve,
+  alfredUsers,
+  alfredFamilies,
   fetchConnections,
   createConnection,
   deleteConnection,
@@ -15,6 +20,76 @@ import {
 export default function SettingsPage() {
   const alfredToken = localStorage.getItem("alfred_token");
   const isAdmin = !!alfredToken;
+  const [alfredPhone, setAlfredPhone] = useState(localStorage.getItem("alfred_admin_phone") ?? "");
+  const [phoneInput, setPhoneInput] = useState("");
+  const [phoneMsg, setPhoneMsg] = useState("");
+  const [phoneErr, setPhoneErr] = useState("");
+  const [linkingPhone, setLinkingPhone] = useState(false);
+  const [alfredMe, setAlfredMe] = useState<AlfredUser | null>(null);
+  const [alfredFamily, setAlfredFamily] = useState<AlfredFamily | null>(null);
+  const [familyMembers, setFamilyMembers] = useState<AlfredUser[]>([]);
+  const [editName, setEditName] = useState("");
+  const [savingName, setSavingName] = useState(false);
+  const [nameMsg, setNameMsg] = useState("");
+
+  async function loadAlfredAccount(phone: string) {
+    try {
+      const resolved = await alfredResolve(phone);
+      if (!resolved) { setAlfredMe(null); return; }
+      const user: AlfredUser = { ...resolved, id: resolved.user_id };
+      setAlfredMe(user);
+      setEditName(user.display_name ?? "");
+      if (user.family_id && user.role === "admin") {
+        const detail = await alfredFamilies.get(phone, user.family_id);
+        setAlfredFamily(detail);
+        setFamilyMembers(detail.members);
+      } else if (user.family_id) {
+        // non-admin: just show family via resolve (no detail endpoint without admin)
+        setAlfredFamily({ id: user.family_id, name: "My Family", created_by: null, created_at: "", updated_at: "" });
+      }
+    } catch { /* not yet bootstrapped */ }
+  }
+
+  useEffect(() => {
+    if (alfredPhone) loadAlfredAccount(alfredPhone);
+  }, [alfredPhone]);
+
+  async function handleLinkPhone(e: React.FormEvent) {
+    e.preventDefault();
+    setLinkingPhone(true);
+    setPhoneMsg(""); setPhoneErr("");
+    try {
+      const resolved = await alfredResolve(phoneInput.trim());
+      if (!resolved) {
+        setPhoneErr("Phone not found in Alfred — ask an admin to add it first, or run Bootstrap.");
+        return;
+      }
+      const phone = phoneInput.trim();
+      localStorage.setItem("alfred_admin_phone", phone);
+      setAlfredPhone(phone);
+      setPhoneInput("");
+      setPhoneMsg("Phone linked!");
+    } catch (e: unknown) {
+      setPhoneErr(e instanceof Error ? e.message : "Failed to verify phone");
+    } finally {
+      setLinkingPhone(false);
+    }
+  }
+
+  async function handleSaveName(e: React.FormEvent) {
+    e.preventDefault();
+    if (!alfredPhone) return;
+    setSavingName(true); setNameMsg("");
+    try {
+      await alfredUsers.update(alfredPhone, alfredPhone, { display_name: editName });
+      setNameMsg("Saved.");
+      loadAlfredAccount(alfredPhone);
+    } catch (e: unknown) {
+      setNameMsg(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSavingName(false);
+    }
+  }
 
   // ── Bot state ──────────────────────────────────────────────
   const [conn, setConn] = useState<WaConnection | null | undefined>(undefined); // undefined = loading
@@ -132,6 +207,108 @@ export default function SettingsPage() {
   return (
     <div style={{ padding: "1.5rem", maxWidth: 620 }}>
       <h2 style={{ marginTop: 0 }}>Settings</h2>
+
+      {/* ── Section 0: My Account ────────────────────────────── */}
+      <section style={sectionStyle}>
+        <h3 style={{ marginTop: 0 }}>My Account</h3>
+        {!alfredPhone ? (
+          <>
+            <p style={{ color: "#64748b", fontSize: "0.9rem", marginTop: 0 }}>
+              Link your Alfred phone number to access account features.
+            </p>
+            <form onSubmit={handleLinkPhone} style={{ display: "flex", gap: "0.5rem" }}>
+              <input
+                type="tel"
+                value={phoneInput}
+                onChange={(e) => setPhoneInput(e.target.value)}
+                placeholder="+14081234567"
+                style={inputStyle}
+                required
+              />
+              <button type="submit" disabled={linkingPhone} style={btnStyle}>
+                {linkingPhone ? "Verifying…" : "Link"}
+              </button>
+            </form>
+            {phoneMsg && <p style={{ color: "#16a34a", fontSize: "0.875rem", margin: "0.5rem 0 0" }}>{phoneMsg}</p>}
+            {phoneErr && <p style={{ color: "#dc2626", fontSize: "0.875rem", margin: "0.5rem 0 0" }}>{phoneErr}</p>}
+          </>
+        ) : alfredMe ? (
+          <>
+            <div style={{ display: "flex", gap: "1.5rem", marginBottom: "1rem", flexWrap: "wrap" }}>
+              <div>
+                <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginBottom: 2 }}>Phone</div>
+                <code style={codeStyle}>{alfredMe.phone}</code>
+              </div>
+              <div>
+                <div style={{ fontSize: "0.75rem", color: "#94a3b8", marginBottom: 2 }}>Role</div>
+                <span style={{
+                  display: "inline-block", padding: "0.1rem 0.5rem", borderRadius: 3, fontSize: "0.8rem",
+                  background: alfredMe.role === "admin" ? "#e0e7ff" : "#f1f5f9",
+                  color: alfredMe.role === "admin" ? "#4338ca" : "#475569",
+                  fontWeight: alfredMe.role === "admin" ? 600 : 400,
+                }}>{alfredMe.role}</span>
+              </div>
+            </div>
+            <form onSubmit={handleSaveName} style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+              <label style={{ fontSize: "0.875rem", color: "#475569", whiteSpace: "nowrap" }}>Display name</label>
+              <input
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                style={{ ...inputStyle, flex: 1 }}
+                placeholder="Your name"
+              />
+              <button type="submit" disabled={savingName} style={btnStyle}>
+                {savingName ? "Saving…" : "Save"}
+              </button>
+            </form>
+            {nameMsg && <p style={{ color: "#16a34a", fontSize: "0.875rem", margin: "0.5rem 0 0" }}>{nameMsg}</p>}
+            <button
+              style={{ marginTop: "1rem", background: "none", border: "none", color: "#94a3b8", fontSize: "0.8rem", cursor: "pointer", padding: 0 }}
+              onClick={() => { localStorage.removeItem("alfred_admin_phone"); setAlfredPhone(""); setAlfredMe(null); }}
+            >
+              Unlink phone
+            </button>
+          </>
+        ) : (
+          <p style={{ color: "#64748b", fontSize: "0.875rem" }}>
+            Linked as <code style={codeStyle}>{alfredPhone}</code> — loading…
+          </p>
+        )}
+      </section>
+
+      {/* ── My Family (read-only) ────────────────────────────── */}
+      {alfredMe?.family_id && (
+        <section style={sectionStyle}>
+          <h3 style={{ marginTop: 0 }}>My Family</h3>
+          {alfredFamily && (
+            <p style={{ color: "#475569", fontSize: "0.9rem", margin: "0 0 0.75rem" }}>
+              <strong>{alfredFamily.name}</strong>
+            </p>
+          )}
+          {familyMembers.length > 0 ? (
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.875rem" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #e2e8f0" }}>
+                  <th style={thStyle}>Phone</th>
+                  <th style={thStyle}>Name</th>
+                  <th style={thStyle}>Role</th>
+                </tr>
+              </thead>
+              <tbody>
+                {familyMembers.map((m) => (
+                  <tr key={m.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                    <td style={tdStyle}><code style={codeStyle}>{m.phone}</code></td>
+                    <td style={tdStyle}>{m.display_name ?? <span style={{ color: "#94a3b8" }}>—</span>}</td>
+                    <td style={tdStyle}>{m.role}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p style={{ color: "#94a3b8", fontSize: "0.875rem" }}>No other members.</p>
+          )}
+        </section>
+      )}
 
       {/* ── Section 1: Alfred Bot (admin only) ──────────────── */}
       {isAdmin && (
@@ -342,5 +519,5 @@ const codeStyle: React.CSSProperties = {
   fontFamily: "monospace",
   fontSize: "0.9em",
 };
-const thStyle: React.CSSProperties = { padding: "0.4rem 0.6rem", color: "#64748b", fontWeight: 600 };
+const thStyle: React.CSSProperties = { padding: "0.4rem 0.6rem", color: "#64748b", fontWeight: 600, textAlign: "left" };
 const tdStyle: React.CSSProperties = { padding: "0.5rem 0.6rem", verticalAlign: "middle" };

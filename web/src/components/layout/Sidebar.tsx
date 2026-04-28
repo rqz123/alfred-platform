@@ -13,6 +13,7 @@ const NAV_ITEMS = [
     { label: "Set Reminder", path: "/nudge/set-reminder" },
   ]},
   { label: "Settings", icon: "⚙", path: "/settings" },
+  { label: "Admin Panel", icon: "🛡", path: "/admin", adminOnly: true },
   { label: "Logs", icon: "📋", path: "/logs", adminOnly: true },
 ];
 

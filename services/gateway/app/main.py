@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.api.account_routes import alfred_router
 from app.api.routes import (
     auth_router,
     connection_router,
@@ -106,6 +107,7 @@ def healthcheck() -> dict[str, str]:
     return {"status": "ok"}
 
 
+app.include_router(alfred_router)
 app.include_router(auth_router, prefix="/api")
 app.include_router(connection_router, prefix="/api")
 app.include_router(conversation_router, prefix="/api")

@@ -1,6 +1,7 @@
 from sqlmodel import Session, SQLModel, create_engine, text
 
 from app.core.config import get_settings
+from app.models.account import AlfredFamily, AlfredUser  # noqa: F401 — registers tables
 from app.models.auth import AdminUser
 from app.models.chat import Contact, Conversation, Message
 

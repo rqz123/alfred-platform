@@ -10,6 +10,7 @@ import NudgeDashboard from "./pages/nudge/NudgeDashboard";
 import NudgeSetReminder from "./pages/nudge/NudgeSetReminder";
 import SettingsPage from "./pages/SettingsPage";
 import LogsPage from "./pages/LogsPage";
+import AdminPanel from "./pages/admin/AdminPanel";
 
 function Layout() {
   return (
@@ -42,6 +43,7 @@ export default function App() {
           <Route path="/nudge/set-reminder" element={<NudgeSetReminder />} />
           <Route path="/nudge" element={<Navigate to="/nudge/dashboard" replace />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/admin" element={<AdminPanel />} />
           <Route path="/logs" element={<LogsPage />} />
           <Route path="/" element={<Navigate to="/alfred" replace />} />
         </Route>

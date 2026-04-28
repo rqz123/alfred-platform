@@ -185,3 +185,98 @@ export function deleteConversation(token: string, conversationId: number) {
 export function deleteAllConversations(token: string) {
   return apiRequest<void>("/conversations", { method: "DELETE" }, token);
 }
+
+// ── Alfred Account API ─────────────────────────────────────────────────────────
+
+export type AlfredUser = {
+  id: string;
+  phone: string;
+  display_name: string | null;
+  role: "admin" | "user";
+  family_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AlfredFamily = {
+  id: string;
+  name: string;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AlfredFamilyDetail = AlfredFamily & { members: AlfredUser[] };
+
+async function alfredRequest<T>(
+  path: string,
+  adminPhone: string,
+  init?: RequestInit,
+): Promise<T> {
+  const headers = new Headers(init?.headers ?? {});
+  headers.set("Content-Type", "application/json");
+  headers.set("X-Alfred-Phone", adminPhone);
+
+  const response = await fetch(`/api/alfred${path}`, {
+    ...init,
+    headers,
+    credentials: "include",
+  });
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({ detail: { message: "Request failed" } }));
+    const msg = data?.detail?.message ?? data?.detail ?? "Request failed";
+    throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+  }
+  if (response.status === 204) return undefined as T;
+  return response.json() as Promise<T>;
+}
+
+export function alfredBootstrap(payload: {
+  family_name: string;
+  admin_phone: string;
+  admin_display_name: string;
+}) {
+  return fetch("/api/alfred/bootstrap", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+    credentials: "include",
+  }).then(async (r) => {
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.detail?.message ?? data?.detail ?? "Bootstrap failed");
+    return data as { success: boolean; user_id: string; family_id: string; message: string };
+  });
+}
+
+export function alfredResolve(phone: string) {
+  return fetch(`/api/alfred/resolve?phone=${encodeURIComponent(phone)}`, {
+    credentials: "include",
+  }).then(async (r) => {
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error("Resolve failed");
+    return r.json() as Promise<AlfredUser & { user_id: string }>;
+  });
+}
+
+export const alfredUsers = {
+  list: (adminPhone: string) =>
+    alfredRequest<AlfredUser[]>("/users", adminPhone),
+  create: (adminPhone: string, payload: { phone: string; display_name?: string; family_id?: string }) =>
+    alfredRequest<AlfredUser>("/users", adminPhone, { method: "POST", body: JSON.stringify(payload) }),
+  update: (adminPhone: string, phone: string, payload: Partial<{ display_name: string; role: string; family_id: string | null }>) =>
+    alfredRequest<AlfredUser>(`/users/${encodeURIComponent(phone)}`, adminPhone, { method: "PATCH", body: JSON.stringify(payload) }),
+  delete: (adminPhone: string, phone: string) =>
+    alfredRequest<void>(`/users/${encodeURIComponent(phone)}`, adminPhone, { method: "DELETE" }),
+};
+
+export const alfredFamilies = {
+  list: (adminPhone: string) =>
+    alfredRequest<AlfredFamily[]>("/families", adminPhone),
+  create: (adminPhone: string, name: string) =>
+    alfredRequest<AlfredFamily>("/families", adminPhone, { method: "POST", body: JSON.stringify({ name }) }),
+  get: (adminPhone: string, id: string) =>
+    alfredRequest<AlfredFamilyDetail>(`/families/${id}`, adminPhone),
+  delete: (adminPhone: string, id: string) =>
+    alfredRequest<void>(`/families/${id}`, adminPhone, { method: "DELETE" }),
+};
