@@ -37,6 +37,16 @@ from models.schema import ExpenseCategory, DeductionType
 router = APIRouter()
 verify_token = make_verify_token("/api/ourcents/auth/login")
 
+_DEFAULT_CURRENCY = os.environ.get("OURCENTS_DEFAULT_CURRENCY", "USD")
+_CURRENCY_SYMBOLS: dict[str, str] = {
+    "USD": "$", "CNY": "¥", "EUR": "€", "GBP": "£", "HKD": "HK$", "JPY": "¥",
+}
+
+
+def _fmt_amount(amount: float, currency: str) -> str:
+    sym = _CURRENCY_SYMBOLS.get(currency, currency)
+    return f"{sym}{amount:.2f}"
+
 
 # ─────────────────────────────────────────────────────
 # Dependency helpers
@@ -663,13 +673,14 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
                      0, "text/plain", "virtual://whatsapp"),
                 )
                 upload_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+                currency = req.entities.get("currency") or _DEFAULT_CURRENCY
                 conn.execute(
                     "INSERT INTO receipts "
                     "    (family_id, user_id, upload_file_id, merchant_name, merchant_normalized, "
                     "     purchase_date, total_amount, currency, category, status, confidence_score) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (family_id, user_id, upload_id, f"WA +{normalized}", "whatsapp_expense",
-                     purchase_date, float(amount), "CNY", category_val, "confirmed", 1.0),
+                     purchase_date, float(amount), currency, category_val, "confirmed", 1.0),
                 )
                 receipt_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
                 conn.execute(
@@ -686,7 +697,7 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
                 )
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
-                message=f"Expense recorded: ¥{float(amount):.2f} ({purchase_date}, {category_val})",
+                message=f"Expense recorded: {_fmt_amount(float(amount), currency)} ({purchase_date}, {category_val})",
             )
         except Exception:
             return AlfredExecuteResponse(
@@ -723,11 +734,12 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
 
         try:
             with db.get_connection() as conn:
+                currency = req.entities.get("currency") or _DEFAULT_CURRENCY
                 conn.execute(
                     "INSERT INTO income_entries "
                     "    (family_id, user_id, amount, currency, category, source, income_date, notes) "
                     "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (family_id, user_id, float(amount), "CNY", income_category,
+                    (family_id, user_id, float(amount), currency, income_category,
                      "whatsapp", income_date, "WhatsApp quick entry"),
                 )
                 entry_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
@@ -735,11 +747,11 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
                     "INSERT INTO audit_logs (user_id, action, entity_type, entity_id, details) "
                     "VALUES (?, ?, ?, ?, ?)",
                     (user_id, "create", "income_entry", entry_id,
-                     f"WhatsApp quick income: ¥{amount:.2f}"),
+                     f"WhatsApp quick income: {_fmt_amount(float(amount), currency)}"),
                 )
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
-                message=f"Income recorded: ¥{float(amount):.2f} ({income_date}, {income_category})",
+                message=f"Income recorded: {_fmt_amount(float(amount), currency)} ({income_date}, {income_category})",
             )
         except Exception:
             return AlfredExecuteResponse(

@@ -113,8 +113,12 @@ app.include_router(internal_router, prefix="/api")
 app.include_router(message_router, prefix="/api")
 app.include_router(webhook_router)
 
-# Serve built React frontend in production
-_DIST_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "web", "dist")
+# Serve built React frontend
+# Docker: Dockerfile copies web/dist → /service/dist (one level up from /service/app)
+# Local:  web/dist is at repo root/web/dist (three levels up from services/gateway/app)
+_docker_dist = os.path.join(os.path.dirname(__file__), "..", "dist")
+_local_dist = os.path.join(os.path.dirname(__file__), "..", "..", "..", "web", "dist")
+_DIST_DIR = _docker_dist if os.path.isdir(_docker_dist) else _local_dist
 if os.path.isdir(_DIST_DIR):
     app.mount("/assets", StaticFiles(directory=os.path.join(_DIST_DIR, "assets")), name="assets")
 

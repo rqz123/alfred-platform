@@ -277,7 +277,7 @@ app.post("/sessions/:id/messages/media", requireBridgeKey, async (req, res) => {
   }
 });
 
-app.listen(port, () => {
-  log("info", `Alfred bridge listening on http://127.0.0.1:${port}`);
+app.listen(port, "0.0.0.0", () => {
+  log("info", `Alfred bridge listening on http://0.0.0.0:${port}`);
 });
 

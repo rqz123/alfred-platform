@@ -51,7 +51,7 @@ KEYWORD_MAP = [
     # get_balance: balance/remaining/account/surplus/how-much
     (['\u4f59\u989d', '\u8fd8\u5269', '\u8d26\u6237', '\u7ed3\u4f59', '\u591a\u5c11\u94b1'],
      'get_balance'),
-    # acknowledge_reminder: OK/got-it/confirmed/received + quick-reply button "✓ OK"
+    # acknowledge_reminder: quick-reply button "✓ OK" and unambiguous Chinese phrases
     (['\u2713 ok', '\u786e\u8ba4', '\u6536\u5230', '\u77e5\u9053\u4e86', '\u660e\u767d\u4e86',
       '\u597d\u7684', 'got it', 'confirmed', 'acknowledged'],
      'acknowledge_reminder'),
@@ -95,17 +95,25 @@ def _keyword_detect(text: str) -> Optional[dict]:
 def _extract_entities(text: str, intent: str) -> dict:
     entities: dict = {}
 
+    # Currency symbol (check before stripping it from the amount regex)
+    _sym_map = {'$': 'USD', '\xa5': 'CNY', '\uff65': 'CNY', '\uff04': 'USD',
+                '\u20ac': 'EUR', '\u00a3': 'GBP'}
+    for sym, code in _sym_map.items():
+        if sym in text:
+            entities['currency'] = code
+            break
+
     # Amount: e.g. 50, ¥50, $50, 50.5
     m = re.search(r'[\xa5$\uff65]?\s*([0-9]+(?:\.[0-9]{1,2})?)', text)
     if m:
         entities['amount'] = float(m.group(1))
 
-    # Date keywords
-    if '\u4eca\u5929' in text:       # today
+    # Date keywords (English and Chinese)
+    if 'today' in text or '\u4eca\u5929' in text:
         entities['date'] = 'today'
-    elif '\u660e\u5929' in text:     # tomorrow
+    elif 'tomorrow' in text or '\u660e\u5929' in text:
         entities['date'] = 'tomorrow'
-    elif '\u6628\u5929' in text:     # yesterday
+    elif 'yesterday' in text or '\u6628\u5929' in text:
         entities['date'] = 'yesterday'
 
     # Category hints for expense/income/budget
@@ -179,12 +187,13 @@ _INTENT_SCHEMA = {
                 "type": "object",
                 "properties": {
                     "amount":   {"anyOf": [{"type": "number"}, {"type": "null"}]},
+                    "currency": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "date":     {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "category": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "title":    {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "content":  {"anyOf": [{"type": "string"}, {"type": "null"}]},
                 },
-                "required": ["amount", "date", "category", "title", "content"],
+                "required": ["amount", "currency", "date", "category", "title", "content"],
                 "additionalProperties": False,
             },
         },
@@ -223,6 +232,8 @@ _SYSTEM_PROMPT = (
     "- Gibberish or messages with no actionable meaning → 'none'.\n\n"
     "Extract entities when present:\n"
     "- amount: numeric value (e.g. 50.0)\n"
+    "- currency: ISO currency code inferred from the symbol: $ → USD, ¥ or ￥ → CNY, € → EUR, £ → GBP, "
+    "HK$ → HKD. Use null if no currency symbol is present (caller will apply a default).\n"
     "- date: 'today', 'yesterday', or 'tomorrow' if mentioned\n"
     "- category: pick the best match from this list for expense/income/budget:\n"
     "    'food' (restaurants, groceries, coffee, drinks, meals)\n"
@@ -233,8 +244,10 @@ _SYSTEM_PROMPT = (
     "    'utilities' (electricity, water, internet, phone bill, rent)\n"
     "    'other' (anything that does not fit the above)\n"
     "  Use null only if no category can be inferred at all.\n"
-    "- title: reminder content text for add_reminder; or the reference (number or name) for cancel_reminder — put it in title\n"
-    "- content: the full text the user wants to save for add_note / add_note intents — "
+    "- title: for add_reminder, capture the COMPLETE reminder request including any time/date "
+    "(e.g. 'alarm at 1:10 pm', 'call John tomorrow at 9am', 'wake me at 7:30', 'meeting every Monday at 8am'); "
+    "for cancel_reminder, the reference number or name — put it in title\n"
+    "- content: the full text the user wants to save for add_note intents — "
     "capture everything after the trigger word (e.g. 'Note', '记一下', '笔记') as content; "
     "use null for all other intents\n"
     "Set confidence between 0 and 1. Use null for entities that are not present."
@@ -312,3 +325,53 @@ def extract_entities(text: str, intent: str) -> dict:
     supplementary message (e.g. "50 yuan" after "spent money" was already routed).
     """
     return _extract_entities(text.lower(), intent)
+
+
+def is_affirmative(text: str) -> bool:
+    """
+    Ask the LLM whether the message is a positive / confirming response.
+
+    Used when detect_intent returns None for a short message — to catch things
+    like 'Ok', 'okay', '好', 'yes', 'yep', '是', '嗯', 'sure', 'alright', etc.
+    Falls back to a small hard-coded set when the LLM key is not configured.
+    """
+    from app.core.config import get_settings
+    settings = get_settings()
+
+    if settings.intent_openai_api_key:
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=settings.intent_openai_api_key)
+            response = client.chat.completions.create(
+                model=settings.intent_openai_model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Answer only 'yes' or 'no'. "
+                            "Is the following message an affirmative, positive, or confirming response? "
+                            "Examples that should return 'yes': OK, okay, ok, yes, yeah, yep, sure, done, "
+                            "got it, alright, good, fine, confirmed, 好, 是, 好的, 好啊, 嗯, 行, 可以, 收到, "
+                            "知道了, 明白了, 没问题. "
+                            "Return 'no' for anything else."
+                        ),
+                    },
+                    {"role": "user", "content": text},
+                ],
+                max_tokens=3,
+                timeout=5.0,
+            )
+            return response.choices[0].message.content.strip().lower().startswith("yes")
+        except Exception as exc:
+            logger.warning("is_affirmative LLM call failed: %s", exc)
+
+    # Keyword fallback
+    t = text.strip().lower()
+    _affirmative = {
+        'ok', 'okay', 'yes', 'yeah', 'yep', 'yup', 'sure', 'done', 'good',
+        'got it', 'alright', 'fine', 'confirmed', 'acknowledged',
+        '\u597d', '\u662f', '\u597d\u7684', '\u597d\u554a', '\u5d4c', '\u884c',
+        '\u53ef\u4ee5', '\u6536\u5230', '\u77e5\u9053\u4e86', '\u660e\u767d\u4e86',
+        '\u6ca1\u95ee\u9898',
+    }
+    return t in _affirmative

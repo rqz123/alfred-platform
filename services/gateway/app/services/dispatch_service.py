@@ -25,7 +25,7 @@ from app.core.config import get_settings
 from app.models.chat import Contact, Conversation, Message, WhatsAppConnection
 from app.schemas.chat import MessageRead
 from app.services.bridge_service import send_text_via_bridge
-from app.services.intent_service import detect_intent, extract_entities
+from app.services.intent_service import detect_intent, extract_entities, is_affirmative
 from app.services.pending_sessions import (
     MAX_RETRIES,
     PendingSession,
@@ -99,6 +99,13 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
     # ── Fresh request ─────────────────────────────────────────────
     result = detect_intent(text)
     if result is None:
+        # Short messages (≤ 20 chars) might be affirmative responses in any language.
+        # Ask the LLM before falling through to chat, so "Ok", "好", "yes", etc.
+        # reliably acknowledge a waiting reminder regardless of phrasing.
+        if len(text.strip()) <= 20 and is_affirmative(text):
+            result = {'intent': 'acknowledge_reminder', 'entities': {}}
+            _handle_fresh(session, conv, phone, msg, result, settings)
+            return
         from app.services.chat_service import llm_chat_reply
         _reply(session, conv, phone, llm_chat_reply(session, msg, settings), settings)
         return
@@ -210,11 +217,6 @@ def _handle_followup(
     new_entities = extract_entities(text, pending.intent)
     merged = {**pending.entities, **new_entities}
 
-    if not new_entities:
-        # Nothing useful extracted — don't loop; silently wait
-        logger.debug('Follow-up from %s yielded no entities for intent %s', phone, pending.intent)
-        return
-
     pending.retries += 1
     if pending.retries > MAX_RETRIES:
         clear_pending(phone)
@@ -223,13 +225,17 @@ def _handle_followup(
                settings)
         return
 
+    if not new_entities:
+        logger.debug('Follow-up from %s yielded no entities for intent %s; re-prompting',
+                     phone, pending.intent)
+
     resp = _call_service(pending.service, phone, msg.conversation_id, pending.intent, merged)
     if resp is None:
         return
 
     if resp.get('error_code') == 'INSUFFICIENT_DATA':
-        # Still missing something — update stored entities and keep the session
-        save_pending(phone, pending.intent, merged, pending.service)
+        # Update stored entities in-place so retries counter is preserved
+        pending.entities = merged
     else:
         clear_pending(phone)
 

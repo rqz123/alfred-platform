@@ -1,3 +1,4 @@
+import logging
 from fastapi import Depends, HTTPException, Response, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlmodel import Session
@@ -10,6 +11,8 @@ from app.schemas.auth import LoginResponse, TokenPayload
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
+
+_log = logging.getLogger("alfred.auth")
 
 def build_login_response(response: Response, admin, password: str) -> LoginResponse:
     if not verify_password(password, admin.password_hash):

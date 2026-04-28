@@ -455,9 +455,16 @@ async def alfred_execute(req: AlfredExecuteRequest):
                 error_code="INSUFFICIENT_DATA",
                 message="Please tell me what to remind you about, e.g.: remind me to call John tomorrow",
             )
+        # If the gateway also extracted a date entity separately, append it so the
+        # parser has both subject and timing even if the title was stripped of the date.
+        date_hint = (req.entities.get("date") or "").strip()
+        parse_input = title
+        if date_hint and date_hint.lower() not in title.lower():
+            parse_input = f"{title} {date_hint}"
+
         # Parse and create reminder using the existing parse service
         try:
-            result = await parse_reminder(title, _DEFAULT_TZ)
+            result = await parse_reminder(parse_input, _DEFAULT_TZ)
         except Exception:
             result = {"reminder": {"title": title, "type": "once", "fireAt": None,
                                    "cronExpression": None, "timezone": _DEFAULT_TZ,

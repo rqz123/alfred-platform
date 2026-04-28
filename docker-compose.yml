@@ -99,7 +99,7 @@ services:
       # Dispatch enabled
       DISPATCH_ENABLED: "true"
       # Bridge URL for WhatsApp Web mode
-      BRIDGE_BASE_URL: http://bridge:3001
+      BRIDGE_API_URL: http://bridge:3001
     volumes:
       - alfred-data:/data
     depends_on:

@@ -1,0 +1,502 @@
+# ──────────────────────────────────────────────────────────────────
+# wa-sim scenario definitions
+#
+# Each scenario has:
+#   name:        unique identifier
+#   group:       phone group that owns this scenario (finance/reminders/notes/chat/errors)
+#   weight:      relative pick probability within the group (default 1)
+#   description: human-readable summary
+#   steps:       ordered list of send/check steps
+#
+# Each step has:
+#   phone:           the virtual phone number sending the message
+#   send:            message text
+#   expect_contains: (optional) substring that must appear in Alfred's reply
+#   expect_none:     (optional, bool) assert Alfred does NOT reply (for silent errors)
+#   no_wait:         (optional, bool) don't wait for a reply (fire-and-forget)
+#   pause:           (optional, float) seconds to pause BEFORE this step
+# ──────────────────────────────────────────────────────────────────
+
+scenarios:
+
+  # ── GROUP: finance ─────────────────────────────────────────────
+  # Alice (+18005550001) tests all finance intents
+
+  - name: add_expense_single
+    group: finance
+    weight: 3
+    description: "Record a single expense in one message"
+    steps:
+      - phone: "+18005550001"
+        send: "花了$40吃午饭"
+        expect_contains: "40"
+
+  - name: add_expense_multiturn
+    group: finance
+    weight: 2
+    description: "Record expense across two messages — amount missing first"
+    steps:
+      - phone: "+18005550001"
+        send: "花了钱买咖啡"
+        # Alfred should ask for the amount
+      - phone: "+18005550001"
+        send: "15块"
+        expect_contains: "15"
+
+  - name: add_expense_cancel_midflow
+    group: finance
+    weight: 1
+    description: "Start an expense entry then cancel it"
+    steps:
+      - phone: "+18005550001"
+        send: "花了钱买东西"
+        # Alfred asks for amount
+      - phone: "+18005550001"
+        send: "取消"
+        expect_contains: "Cancelled"
+
+  - name: add_expense_english
+    group: finance
+    weight: 2
+    description: "English expense record"
+    steps:
+      - phone: "+18005550001"
+        send: "spent $20 on groceries"
+        expect_contains: "20"
+
+  - name: add_expense_mixed_language
+    group: finance
+    weight: 1
+    description: "Mixed English/Chinese expense"
+    steps:
+      - phone: "+18005550001"
+        send: "spend $50 on 午饭"
+        expect_contains: "50"
+
+  - name: add_income
+    group: finance
+    weight: 2
+    description: "Record income"
+    steps:
+      - phone: "+18005550001"
+        send: "收到工资$3000"
+        expect_contains: "3000"
+
+  - name: add_income_no_amount
+    group: finance
+    weight: 1
+    description: "Income without amount — multi-turn"
+    steps:
+      - phone: "+18005550001"
+        send: "收入了一些钱"
+      - phone: "+18005550001"
+        send: "500元"
+        expect_contains: "500"
+
+  - name: get_balance
+    group: finance
+    weight: 2
+    description: "Check account balance"
+    steps:
+      - phone: "+18005550001"
+        send: "余额多少"
+
+  - name: monthly_report
+    group: finance
+    weight: 2
+    description: "Request monthly spending summary"
+    steps:
+      - phone: "+18005550001"
+        send: "月报"
+
+  - name: set_budget
+    group: finance
+    weight: 1
+    description: "Set a spending budget"
+    steps:
+      - phone: "+18005550001"
+        send: "设置餐饮预算每月1000元"
+        expect_contains: "budget"
+
+  - name: expense_no_amount_give_up
+    group: finance
+    weight: 1
+    description: "Keep giving non-amount replies until Alfred gives up (tests MAX_RETRIES)"
+    steps:
+      - phone: "+18005550001"
+        send: "花了钱"
+      - phone: "+18005550001"
+        send: "不记得了"
+      - phone: "+18005550001"
+        send: "反正就是花了"
+        # After MAX_RETRIES Alfred should abandon
+
+
+  # ── GROUP: reminders ──────────────────────────────────────────
+  # Bob (+18005550002) tests all reminder intents
+
+  - name: add_reminder_single
+    group: reminders
+    weight: 3
+    description: "Set a reminder in one message"
+    steps:
+      - phone: "+18005550002"
+        send: "明天下午2点提醒我开会"
+        expect_contains: "reminder"
+
+  - name: add_reminder_multiturn
+    group: reminders
+    weight: 2
+    description: "Set a reminder — title first, time in second message"
+    steps:
+      - phone: "+18005550002"
+        send: "remind me to meet friends"
+      - phone: "+18005550002"
+        send: "tomorrow at noon"
+        expect_contains: "reminder"
+
+  - name: add_reminder_english
+    group: reminders
+    weight: 2
+    description: "English alarm request"
+    steps:
+      - phone: "+18005550002"
+        send: "set an alarm at 7:30am"
+        expect_contains: "reminder"
+
+  - name: add_reminder_recurring
+    group: reminders
+    weight: 1
+    description: "Set a recurring weekly reminder"
+    steps:
+      - phone: "+18005550002"
+        send: "每周一早上9点提醒我开会"
+        expect_contains: "reminder"
+
+  - name: add_reminder_tonight
+    group: reminders
+    weight: 1
+    description: "Tonight reminder (should never shift to tomorrow)"
+    steps:
+      - phone: "+18005550002"
+        send: "今晚提醒我锁门"
+        expect_contains: "reminder"
+
+  - name: list_reminders
+    group: reminders
+    weight: 2
+    description: "List active reminders"
+    steps:
+      - phone: "+18005550002"
+        send: "我的提醒"
+
+  - name: acknowledge_reminder
+    group: reminders
+    weight: 2
+    description: "Acknowledge a reminder with various affirmative phrases"
+    steps:
+      - phone: "+18005550002"
+        send: "Ok"
+      - phone: "+18005550002"
+        pause: 1.0
+        send: "好的"
+      - phone: "+18005550002"
+        pause: 1.0
+        send: "yes"
+      - phone: "+18005550002"
+        pause: 1.0
+        send: "收到"
+
+  - name: cancel_reminder_by_number
+    group: reminders
+    weight: 1
+    description: "Cancel reminder #1"
+    steps:
+      - phone: "+18005550002"
+        send: "取消提醒1"
+
+  - name: cancel_reminder_by_name
+    group: reminders
+    weight: 1
+    description: "Cancel a named reminder"
+    steps:
+      - phone: "+18005550002"
+        send: "cancel reminder meeting"
+
+  - name: get_schedule
+    group: reminders
+    weight: 1
+    description: "Ask about today's schedule"
+    steps:
+      - phone: "+18005550002"
+        send: "今天有什么安排"
+
+  - name: reminder_cancel_midflow
+    group: reminders
+    weight: 1
+    description: "Start setting a reminder then cancel"
+    steps:
+      - phone: "+18005550002"
+        send: "remind me"
+      - phone: "+18005550002"
+        send: "算了，不用了"
+        expect_contains: "Cancelled"
+
+
+  # ── GROUP: notes ──────────────────────────────────────────────
+  # Carol (+18005550003) tests all notes intents
+
+  - name: add_note_chinese
+    group: notes
+    weight: 3
+    description: "Save a Chinese note"
+    steps:
+      - phone: "+18005550003"
+        send: "记一下明天要去药房拿药"
+        expect_contains: "note"
+
+  - name: add_note_english
+    group: notes
+    weight: 2
+    description: "Save an English note"
+    steps:
+      - phone: "+18005550003"
+        send: "note: buy milk and bread on the way home"
+        expect_contains: "note"
+
+  - name: add_note_jot
+    group: notes
+    weight: 1
+    description: "Save a note using 'jot' trigger word"
+    steps:
+      - phone: "+18005550003"
+        send: "jot call landlord about the heater"
+        expect_contains: "note"
+
+  - name: add_note_write_down
+    group: notes
+    weight: 1
+    description: "Save a note using 'write down' trigger"
+    steps:
+      - phone: "+18005550003"
+        send: "write down the wifi password is Alfred2025"
+        expect_contains: "note"
+
+  - name: list_notes
+    group: notes
+    weight: 2
+    description: "List recent notes"
+    steps:
+      - phone: "+18005550003"
+        send: "我的笔记"
+
+  - name: list_notes_english
+    group: notes
+    weight: 1
+    description: "List notes in English"
+    steps:
+      - phone: "+18005550003"
+        send: "list notes"
+
+  - name: search_notes_chinese
+    group: notes
+    weight: 2
+    description: "Search notes by Chinese keyword"
+    steps:
+      - phone: "+18005550003"
+        send: "找笔记 药房"
+
+  - name: search_notes_english
+    group: notes
+    weight: 1
+    description: "Search notes by English keyword"
+    steps:
+      - phone: "+18005550003"
+        send: "find note milk"
+
+  - name: add_note_trigger_only
+    group: notes
+    weight: 1
+    description: "Note trigger with no content — should NOT save (none intent)"
+    steps:
+      - phone: "+18005550003"
+        send: "笔记"
+        # Alfred should NOT save an empty note; likely chat or 'none' response
+
+
+  # ── GROUP: chat ───────────────────────────────────────────────
+  # Dave (+18005550004) tests general conversational messages
+
+  - name: greeting_english
+    group: chat
+    weight: 3
+    description: "Simple English greeting"
+    steps:
+      - phone: "+18005550004"
+        send: "Hello Alfred"
+
+  - name: greeting_chinese
+    group: chat
+    weight: 3
+    description: "Chinese greeting"
+    steps:
+      - phone: "+18005550004"
+        send: "你好"
+
+  - name: question_what_can_you_do
+    group: chat
+    weight: 2
+    description: "Ask what Alfred can do"
+    steps:
+      - phone: "+18005550004"
+        send: "你能做什么？"
+
+  - name: question_english
+    group: chat
+    weight: 2
+    description: "Open-ended English question"
+    steps:
+      - phone: "+18005550004"
+        send: "What's the weather like today?"
+
+  - name: chat_after_finance
+    group: chat
+    weight: 1
+    description: "Expense then chat in same session"
+    steps:
+      - phone: "+18005550004"
+        send: "spent $10 on coffee"
+        expect_contains: "10"
+      - phone: "+18005550004"
+        pause: 1.0
+        send: "Thanks!"
+
+  - name: ambiguous_short_message
+    group: chat
+    weight: 2
+    description: "Very short ambiguous message that is NOT affirmative"
+    steps:
+      - phone: "+18005550004"
+        send: "hmm"
+
+  - name: long_chat_message
+    group: chat
+    weight: 1
+    description: "Long conversational paragraph — no intent"
+    steps:
+      - phone: "+18005550004"
+        send: "I've been thinking about managing my finances better this year. Do you have any tips on how to track expenses consistently without it feeling like a chore?"
+
+
+  # ── GROUP: errors ──────────────────────────────────────────────
+  # Eve (+18005550005) tests fault tolerance, edge cases, and malformed input
+
+  - name: gibberish
+    group: errors
+    weight: 2
+    description: "Pure gibberish — Alfred should not crash"
+    steps:
+      - phone: "+18005550005"
+        send: "asdfkjahsdfkjah!!@@##"
+
+  - name: empty_looking_message
+    group: errors
+    weight: 1
+    description: "Message with only spaces/punctuation"
+    steps:
+      - phone: "+18005550005"
+        send: "   ..."
+
+  - name: very_long_message
+    group: errors
+    weight: 1
+    description: "500-character message — tests length handling"
+    steps:
+      - phone: "+18005550005"
+        send: "花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱 buy coffee 花了钱"
+
+  - name: special_characters
+    group: errors
+    weight: 1
+    description: "SQL-injection-looking input — must be handled safely"
+    steps:
+      - phone: "+18005550005"
+        send: "花了$100'; DROP TABLE expenses;--"
+
+  - name: emoji_only
+    group: errors
+    weight: 1
+    description: "Message with only emoji"
+    steps:
+      - phone: "+18005550005"
+        send: "😂🔥💰💸"
+
+  - name: rapid_fire_messages
+    group: errors
+    weight: 1
+    description: "Three messages in rapid succession from same phone"
+    steps:
+      - phone: "+18005550005"
+        send: "花了$10"
+        no_wait: true
+      - phone: "+18005550005"
+        send: "花了$20"
+        no_wait: true
+      - phone: "+18005550005"
+        send: "花了$30"
+        expect_contains: "30"
+
+  - name: acknowledge_no_pending_reminder
+    group: errors
+    weight: 1
+    description: "Acknowledge a reminder when none is pending"
+    steps:
+      - phone: "+18005550005"
+        send: "ok"
+        # Should get a graceful response, not a crash
+
+  - name: cancel_nonexistent_reminder
+    group: errors
+    weight: 1
+    description: "Cancel a reminder that does not exist"
+    steps:
+      - phone: "+18005550005"
+        send: "cancel reminder 999"
+
+  - name: unicode_edge_case
+    group: errors
+    weight: 1
+    description: "Mixed-direction unicode (RTL + LTR)"
+    steps:
+      - phone: "+18005550005"
+        send: "花了 $50 على الغداء"
+
+  - name: search_notes_no_query
+    group: errors
+    weight: 1
+    description: "Search notes with no search term — should ask or return none"
+    steps:
+      - phone: "+18005550005"
+        send: "find note"
+
+  - name: expense_then_cancel_then_new
+    group: errors
+    weight: 1
+    description: "Start expense, cancel, then start fresh — pending session must be cleared"
+    steps:
+      - phone: "+18005550005"
+        send: "花了钱"
+      - phone: "+18005550005"
+        send: "取消"
+        expect_contains: "Cancelled"
+      - phone: "+18005550005"
+        send: "花了$15买了杂志"
+        expect_contains: "15"
+
+  - name: service_unavailable_simulation
+    group: errors
+    weight: 1
+    description: "Intent that maps to a service that may be down (get_balance)"
+    steps:
+      - phone: "+18005550005"
+        send: "账户余额"

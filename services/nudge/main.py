@@ -13,6 +13,7 @@ from database import create_tables, engine, reminders
 from routers.nudge import router as nudge_router
 
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173")
+FRONTEND_ORIGIN_ALT = os.environ.get("FRONTEND_ORIGIN_ALT", "http://127.0.0.1:5173")
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://localhost:8000")
 NUDGE_API_KEY = os.environ.get("NUDGE_API_KEY", "") or os.environ.get("ALFRED_API_KEY", "")
 
@@ -182,7 +183,7 @@ app = FastAPI(title="Nudge API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN, "http://127.0.0.1:5173", "http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_origins=[FRONTEND_ORIGIN, FRONTEND_ORIGIN_ALT, "http://localhost:8000", "http://127.0.0.1:8000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )

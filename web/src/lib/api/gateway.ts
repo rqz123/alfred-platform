@@ -43,6 +43,13 @@ export type Message = {
 // to the same-origin gateway in production.
 const API_BASE = "/api";
 
+function clearSessionAndRedirect() {
+  localStorage.removeItem("alfred_token");
+  localStorage.removeItem("alfred_user");
+  localStorage.removeItem("ourcents_token");
+  window.location.href = "/login";
+}
+
 async function apiRequest<T>(path: string, init?: RequestInit, token?: string): Promise<T> {
   const headers = new Headers(init?.headers ?? {});
   if (!(init?.body instanceof FormData)) {
@@ -57,6 +64,11 @@ async function apiRequest<T>(path: string, init?: RequestInit, token?: string): 
     headers,
     credentials: "include",
   });
+
+  if (response.status === 401) {
+    clearSessionAndRedirect();
+    throw new Error("Session expired");
+  }
 
   if (!response.ok) {
     const data = await response.json().catch(() => ({ detail: "Request failed" }));

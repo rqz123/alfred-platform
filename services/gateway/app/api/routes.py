@@ -1,5 +1,6 @@
 import base64
 import logging
+import os
 from pathlib import Path
 from uuid import uuid4
 
@@ -519,6 +520,7 @@ def receive_service_push(
     contact = create_or_get_contact(session, phone, display_name=None)
     conv = get_or_create_conversation(session, contact)
 
+    provider_message_id: str | None = None
     if settings.whatsapp_mode == "bridge":
         # Prefer the conversation's linked connection; fall back to any active bridge session
         conn_record = session.get(WhatsAppConnection, conv.connection_id) if conv.connection_id else None
@@ -531,18 +533,40 @@ def receive_service_push(
                 None,
             )
         if conn_record:
-            send_text_via_bridge(conn_record.bridge_session_id, contact.phone_number, body)
+            provider_message_id = send_text_via_bridge(conn_record.bridge_session_id, contact.phone_number, body)
         else:
             logger.warning("Bridge push skipped — no active bridge connection found")
     else:
         from app.services.dispatch_service import _send_cloud_reply
         _send_cloud_reply(contact.phone_number, body, settings)
 
+    # Persist outbound message so it appears in the conversation UI
+    from datetime import datetime, timezone as _tz
+    from app.models.chat import Message as _Message
+    try:
+        msg = _Message(
+            conversation_id=conv.id,
+            provider_message_id=provider_message_id,
+            direction="outbound",
+            message_type="text",
+            body=body,
+            delivery_status="sent" if provider_message_id else "queued",
+        )
+        session.add(msg)
+        conv.updated_at = datetime.now(_tz.utc)
+        session.add(conv)
+        session.commit()
+    except Exception as exc:
+        logger.warning("Failed to persist push message: %s", exc)
+
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 # ── Log viewer (admin only) ───────────────────────────────────────────────────
 
-_LOG_DIR = Path(__file__).resolve().parents[4] / ".logs"
+_file_parents = Path(__file__).resolve().parents
+_LOG_DIR = Path(os.environ.get('LOG_DIR') or (
+    _file_parents[4] / '.logs' if len(_file_parents) > 4 else Path('/tmp/alfred-logs')
+))
 _ALLOWED_SERVICES = {"gateway", "ourcents", "nudge", "bridge", "frontend"}
 
 @auth_router.get("/logs/{service}", dependencies=[Depends(get_current_admin)])

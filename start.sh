@@ -37,6 +37,7 @@ set +a
 # ── Build frontend (so port 8000 always serves the latest code) ───────────────
 echo "Building frontend..."
 cd "$REPO/web"
+npm install --silent 2>/dev/null
 npm run build --silent 2>&1 | tail -3
 echo ""
 
@@ -79,7 +80,7 @@ cd "$REPO"
 # ── Wait and health check ─────────────────────────────────────────────────────
 echo ""
 echo "Waiting for services to initialize..."
-sleep 8
+sleep 15
 
 # Bridge can take longer to start (Node.js cold start) — retry for up to 20s
 BRIDGE_UP=0

@@ -13,7 +13,8 @@
 body {
   margin: 0;
   min-width: 320px;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 button,
@@ -27,7 +28,7 @@ button {
 
 .login-shell,
 .app-shell {
-  min-height: 100vh;
+  height: 100vh;
 }
 
 .login-shell {
@@ -81,6 +82,8 @@ button {
   grid-template-columns: 320px minmax(0, 1fr);
   gap: 20px;
   padding: 20px;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .sidebar,
@@ -121,6 +124,7 @@ button {
   display: grid;
   gap: 10px;
   padding: 14px;
+  align-content: start;
 }
 
 .conversation-item {
@@ -149,7 +153,7 @@ button {
 .chat-panel {
   display: grid;
   grid-template-rows: auto auto auto 1fr auto;
-  min-height: calc(100vh - 40px);
+  height: 100%;
   overflow: hidden;
 }
 
@@ -516,6 +520,7 @@ button {
   }
 
   .chat-panel {
+    height: auto;
     min-height: 70vh;
   }
 

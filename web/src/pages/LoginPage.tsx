@@ -16,7 +16,7 @@ export default function LoginPage() {
       localStorage.setItem("alfred_token", result.access_token);
       localStorage.setItem("alfred_user", JSON.stringify(result));
       // Auto-provision OurCents account with the same credentials
-      await ourcentsRegister(creds.username, creds.username, creds.password);
+      await ourcentsRegister(creds.username, creds.username, creds.password).catch(() => {});
       await ourcentsLogin(creds.username, creds.password).catch(() => {});
       navigate("/alfred");
       return;

@@ -13,7 +13,17 @@ logger = logging.getLogger('alfred.registry')
 
 class ServiceRegistry:
     def __init__(self):
-        cfg_path = Path(__file__).parents[4] / 'config' / 'services.yaml'
+        # Resolve config path: env override → /config (Docker) → repo root (local dev)
+        env_path = os.environ.get('SERVICES_YAML_PATH')
+        if env_path:
+            cfg_path = Path(env_path)
+        else:
+            docker_path = Path('/config/services.yaml')
+            # Local dev: __file__ is .../alfred-platform/services/gateway/app/services/service_registry.py
+            # parents[4] = alfred-platform repo root
+            parents = Path(__file__).parents
+            repo_path = parents[4] / 'config' / 'services.yaml' if len(parents) > 4 else Path('/nonexistent')
+            cfg_path = docker_path if docker_path.exists() else repo_path
         try:
             with open(cfg_path) as f:
                 cfg = yaml.safe_load(f)

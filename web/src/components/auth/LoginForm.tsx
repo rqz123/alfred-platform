@@ -7,7 +7,7 @@ type LoginFormProps = {
 
 export function LoginForm({ onSubmit, error }: LoginFormProps) {
   const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("admin123");
+  const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {

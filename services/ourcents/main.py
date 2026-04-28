@@ -30,6 +30,7 @@ logging.basicConfig(
 )
 
 FRONTEND_ORIGIN = os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173")
+FRONTEND_ORIGIN_ALT = os.environ.get("FRONTEND_ORIGIN_ALT", "http://127.0.0.1:5173")
 
 
 @asynccontextmanager
@@ -54,7 +55,7 @@ app = FastAPI(title="OurCents API", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_ORIGIN, "http://127.0.0.1:5173", "http://localhost:8000", "http://127.0.0.1:8000"],
+    allow_origins=[FRONTEND_ORIGIN, FRONTEND_ORIGIN_ALT, "http://localhost:8000", "http://127.0.0.1:8000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
