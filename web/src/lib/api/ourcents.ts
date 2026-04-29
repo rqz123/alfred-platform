@@ -5,21 +5,15 @@ function getAuthHeaders(): Record<string, string> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-function clearSessionAndRedirect() {
-  localStorage.removeItem("alfred_token");
-  localStorage.removeItem("alfred_user");
-  localStorage.removeItem("ourcents_token");
-  window.location.href = "/login";
-}
-
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${OURCENTS_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     ...options,
   });
   if (res.status === 401) {
-    clearSessionAndRedirect();
-    throw new Error("Session expired");
+    localStorage.removeItem("ourcents_token");
+    localStorage.removeItem("ourcents_user");
+    throw new Error("OurCents session expired — please log in to OurCents again.");
   }
   if (!res.ok) {
     const text = await res.text();

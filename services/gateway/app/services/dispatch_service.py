@@ -69,7 +69,7 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
     # Only enforced once alfred_users has been bootstrapped.
     from app.repositories.account_repository import get_user_by_phone, has_any_user
     if has_any_user(session) and get_user_by_phone(session, phone) is None:
-        _reply(session, conv, phone, '您的号码尚未注册，请联系管理员。', settings)
+        _reply(session, conv, phone, 'Your number is not registered. Please contact an admin.', settings)
         return
 
     # ── Bot commands / pending confirmations ───────────────────────
@@ -117,7 +117,7 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
     result = detect_intent(text)
     if result is None:
         # Short messages (≤ 20 chars) might be affirmative responses in any language.
-        # Ask the LLM before falling through to chat, so "Ok", "好", "yes", etc.
+        # Ask the LLM before falling through to chat, so "Ok", "yes", etc.
         # reliably acknowledge a waiting reminder regardless of phrasing.
         if len(text.strip()) <= 20 and is_affirmative(text):
             result = {'intent': 'acknowledge_reminder', 'entities': {}}

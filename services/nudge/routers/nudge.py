@@ -538,8 +538,6 @@ async def alfred_execute(req: AlfredExecuteRequest):
         confirmed = []
         for r in awaiting_rows:
             if r.get("cronExpression"):
-                # Recurring: schedule next occurrence
-                from services.parser import compute_next_fire
                 next_fire = compute_next_fire(r["cronExpression"], r.get("timezone", _DEFAULT_TZ))
                 upd = dict(status="active", nextFireAt=next_fire, ackRetries="0", updatedAt=now)
             else:

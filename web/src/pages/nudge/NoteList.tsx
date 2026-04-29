@@ -71,7 +71,7 @@ export function NoteList({ notes, onRefresh }: Props) {
       <div style={styles.empty}>
         <p style={{ margin: 0 }}>No notes yet.</p>
         <p style={{ margin: "6px 0 0", fontSize: 12, color: "#9ca3af" }}>
-          Send Alfred a WhatsApp message like "记一下 bought blood pressure pills" to save a note.
+          Send Alfred a WhatsApp message like "note bought blood pressure pills" to save a note.
         </p>
       </div>
     );

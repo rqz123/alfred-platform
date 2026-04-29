@@ -143,13 +143,13 @@ function UsersTab({ adminPhone }: { adminPhone: string }) {
     }
   }
 
-  async function handleSetRole(phone: string, role: "admin" | "user") {
+  async function handleSetFamily(phone: string, family_id: string | null) {
     setError("");
     try {
-      await alfredUsers.update(adminPhone, phone, { role });
+      await alfredUsers.update(adminPhone, phone, { family_id: family_id ?? undefined });
       load();
     } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : "Failed to update role");
+      setError(e instanceof Error ? e.message : "Failed to update family");
     }
   }
 
@@ -163,9 +163,6 @@ function UsersTab({ adminPhone }: { adminPhone: string }) {
       setError(e instanceof Error ? e.message : "Failed to delete user");
     }
   }
-
-  const familyName = (id: string | null) =>
-    id ? (families.find((f) => f.id === id)?.name ?? id) : "—";
 
   return (
     <>
@@ -242,19 +239,19 @@ function UsersTab({ adminPhone }: { adminPhone: string }) {
                       {u.role}
                     </span>
                   </td>
-                  <td style={tdStyle}>{familyName(u.family_id)}</td>
+                  <td style={tdStyle}>
+                    <select
+                      style={{ ...inputStyle, fontSize: "0.8rem", padding: "0.2rem 0.5rem" }}
+                      value={u.family_id ?? ""}
+                      onChange={(e) => handleSetFamily(u.phone, e.target.value || null)}
+                    >
+                      <option value="">— no family —</option>
+                      {families.map((f) => (
+                        <option key={f.id} value={f.id}>{f.name}</option>
+                      ))}
+                    </select>
+                  </td>
                   <td style={{ ...tdStyle, display: "flex", gap: "0.4rem" }}>
-                    {u.role === "user" ? (
-                      <button style={{ ...dangerBtn, border: "1px solid #bbf7d0", color: "#16a34a" }}
-                        onClick={() => handleSetRole(u.phone, "admin")}>
-                        Make admin
-                      </button>
-                    ) : (
-                      <button style={{ ...dangerBtn, border: "1px solid #e2e8f0", color: "#64748b" }}
-                        onClick={() => handleSetRole(u.phone, "user")}>
-                        Demote
-                      </button>
-                    )}
                     <button style={dangerBtn} onClick={() => handleDelete(u.phone)}>Delete</button>
                   </td>
                 </tr>

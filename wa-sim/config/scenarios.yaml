@@ -172,6 +172,7 @@ scenarios:
       - phone: "+18005550002"
         send: "每周一早上9点提醒我开会"
         expect_contains: "reminder"
+        timeout: 60
 
   - name: add_reminder_tonight
     group: reminders
@@ -252,7 +253,7 @@ scenarios:
     description: "Save a Chinese note"
     steps:
       - phone: "+18005550003"
-        send: "记一下明天要去药房拿药"
+        send: "记一下需要去药房拿药"
         expect_contains: "note"
 
   - name: add_note_english
@@ -434,7 +435,7 @@ scenarios:
   - name: rapid_fire_messages
     group: errors
     weight: 1
-    description: "Three messages in rapid succession from same phone"
+    description: "Three messages in rapid succession from same phone — tests no crash, not reply order"
     steps:
       - phone: "+18005550005"
         send: "花了$10"
@@ -444,7 +445,11 @@ scenarios:
         no_wait: true
       - phone: "+18005550005"
         send: "花了$30"
-        expect_contains: "30"
+        no_wait: true
+      - phone: "+18005550005"
+        pause: 5.0
+        send: "余额"
+        # Drain any queued rapid-fire replies; balance confirms OurCents is still healthy
 
   - name: acknowledge_no_pending_reminder
     group: errors

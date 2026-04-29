@@ -79,6 +79,10 @@ async def run_scenario(
     total_steps = len(steps)
     failed_steps = 0
 
+    # Discard stale replies for any phone used in this scenario before starting.
+    scenario_phones = {step["phone"] for step in steps}
+    await _drain_replies(scenario_phones)
+
     for i, step in enumerate(steps, 1):
         phone: str = step["phone"]
         body: str = step["send"]
@@ -86,6 +90,7 @@ async def run_scenario(
         expect: str | None = step.get("expect_contains")
         no_wait: bool = step.get("no_wait", False)
         pause: float = step.get("pause", 0.0)
+        timeout: float = step.get("timeout", REPLY_TIMEOUT)
 
         if pause > 0:
             await asyncio.sleep(pause)
@@ -93,11 +98,21 @@ async def run_scenario(
         ui.log_scenario(scenario["name"], i, total_steps)
         ui.log_sent(phone, body)
 
-        # Send message
-        try:
-            await gateway_client.send_message(phone, name, body, session_id=sid)
-        except Exception as exc:
-            detail = str(exc)
+        # Send message — one automatic retry after 2 s for transient errors
+        send_exc: Exception | None = None
+        for attempt in range(2):
+            try:
+                await gateway_client.send_message(phone, name, body, session_id=sid)
+                send_exc = None
+                break
+            except Exception as exc:
+                send_exc = exc
+                if attempt == 0:
+                    ui.log_error(f"Send error (retrying): {type(exc).__name__}: {exc}")
+                    await asyncio.sleep(2)
+
+        if send_exc is not None:
+            detail = f"{type(send_exc).__name__}: {send_exc}" or type(send_exc).__name__
             ui.log_error(f"Send failed: {detail}")
             error_log.log_result(
                 scenario=scenario["name"], group=group, step=i,
@@ -121,7 +136,7 @@ async def run_scenario(
             # Last step, no expectation: still wait briefly to capture the reply for the log
             needs_reply = True
 
-        reply = await _wait_for_reply(phone, timeout=REPLY_TIMEOUT)
+        reply = await _wait_for_reply(phone, timeout=timeout)
 
         if reply is None:
             ui.log_error(f"Timeout: no reply within {REPLY_TIMEOUT}s")
@@ -129,7 +144,7 @@ async def run_scenario(
                 scenario=scenario["name"], group=group, step=i,
                 phone=phone, sent=body, reply=None,
                 status="timeout", expect_contains=expect,
-                error_detail=f"No reply after {REPLY_TIMEOUT}s",
+                error_detail=f"No reply after {timeout}s",
             )
             failed_steps += 1
             continue
@@ -208,6 +223,20 @@ async def run_group(
 
 
 # ── Reply helper ───────────────────────────────────────────────────
+
+async def _drain_replies(phones: set[str]) -> None:
+    """Discard any already-queued replies for the given phones (non-blocking)."""
+    drained: list[tuple[str, str]] = []
+    while True:
+        try:
+            item = reply_queue.get_nowait()
+            if item[0] not in phones:
+                drained.append(item)
+        except asyncio.QueueEmpty:
+            break
+    for item in drained:
+        await reply_queue.put(item)
+
 
 async def _wait_for_reply(target_phone: str, timeout: float) -> str | None:
     """

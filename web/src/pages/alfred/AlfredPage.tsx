@@ -6,7 +6,6 @@
 import { useEffect, useState } from "react";
 
 import { Composer } from "./Composer";
-import { ConnectionPanel } from "./ConnectionPanel";
 import { ConversationList } from "./ConversationList";
 import { MessageList } from "./MessageList";
 import {
@@ -14,9 +13,7 @@ import {
   Conversation,
   Message,
   clearConversation,
-  createConnection,
   createConversation,
-  deleteConnection,
   deleteConversation,
   deleteAllConversations,
   fetchConnections,
@@ -26,12 +23,9 @@ import {
   sendMessage,
 } from "../../lib/api/gateway";
 
-type SubTab = "conversations" | "settings";
-
 export default function AlfredPage() {
   const token = localStorage.getItem("alfred_token") ?? "";
 
-  const [subTab, setSubTab] = useState<SubTab>("conversations");
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [activeConversationId, setActiveConversationId] = useState<number | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -119,19 +113,6 @@ export default function AlfredPage() {
     setConversations([]);
   }
 
-  async function handleCreateConnection() {
-    if (!token) return;
-    const label = window.prompt("Label for this connection (optional):") ?? undefined;
-    try { await createConnection(token, label); await loadConnections(token); }
-    catch (e) { setChatError(e instanceof Error ? e.message : "Failed"); }
-  }
-
-  async function handleDeleteConnection(id: number) {
-    if (!token) return;
-    try { await deleteConnection(token, id); await loadConnections(token); }
-    catch (e) { setChatError(e instanceof Error ? e.message : "Failed"); }
-  }
-
   async function handleCreateConversation() {
     if (!token) return;
     const phone = window.prompt("Phone number (with country code):");
@@ -150,54 +131,16 @@ export default function AlfredPage() {
 
   return (
     <main className="app-shell">
-      {/* ── Left sidebar: tab switcher + per-tab content ── */}
-      <aside className="sidebar" style={{ display: "flex", flexDirection: "column" }}>
-        {/* Sub-tabs */}
-        <div style={{
-          display: "flex",
-          borderBottom: "1px solid #e5e7eb",
-          flexShrink: 0,
-        }}>
-          {(["conversations", "settings"] as SubTab[]).map((t) => (
-            <button
-              key={t}
-              onClick={() => setSubTab(t)}
-              style={{
-                flex: 1,
-                background: "none",
-                border: "none",
-                borderBottom: subTab === t ? "2px solid #6366f1" : "2px solid transparent",
-                padding: "10px 4px",
-                fontSize: 13,
-                fontWeight: subTab === t ? 600 : 400,
-                color: subTab === t ? "#6366f1" : "#6b7280",
-                cursor: "pointer",
-                textTransform: "capitalize",
-              }}
-            >
-              {t === "conversations" ? "Conversations" : "Settings"}
-            </button>
-          ))}
-        </div>
-
-        {subTab === "conversations" ? (
-          <ConversationList
-            conversations={conversations}
-            activeConversationId={activeConversationId}
-            onSelect={(id) => { setActiveConversationId(id); }}
-            onCreateConversation={handleCreateConversation}
-            onDeleteConversation={handleDeleteConversation}
-            onDeleteAll={handleDeleteAll}
-          />
-        ) : (
-          <div style={{ flex: 1, overflowY: "auto", padding: "1rem" }}>
-            <ConnectionPanel
-              connections={connections}
-              onCreateConnection={handleCreateConnection}
-              onDeleteConnection={handleDeleteConnection}
-            />
-          </div>
-        )}
+      {/* ── Left sidebar: conversation list ── */}
+      <aside className="sidebar">
+        <ConversationList
+          conversations={conversations}
+          activeConversationId={activeConversationId}
+          onSelect={(id) => { setActiveConversationId(id); }}
+          onCreateConversation={handleCreateConversation}
+          onDeleteConversation={handleDeleteConversation}
+          onDeleteAll={handleDeleteAll}
+        />
       </aside>
 
       {/* ── Right panel: chat ── */}

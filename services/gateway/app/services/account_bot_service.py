@@ -61,7 +61,7 @@ def handle_bot_command(session: Session, phone: str, text: str) -> Optional[str]
     lower = stripped.lower()
     if user.role != "admin":
         if any(lower.startswith(p) for p in _ADMIN_PREFIXES):
-            return "❌ 仅 Admin 可执行此操作"
+            return "❌ Admin only."
         return None
 
     return _dispatch_command(session, user, stripped)
@@ -99,20 +99,19 @@ def _dispatch_command(session: Session, admin, text: str) -> Optional[str]:
 def _handle_confirmation(session: Session, phone: str, text: str) -> str:
     pending = _pending_confirmations.pop(phone)
     if text.strip().upper() != "YES":
-        return "取消操作。"
+        return "Cancelled."
 
     if pending["action"] == "remove_user":
         target_phone = pending["target"]
-        admin = repo.get_user_by_phone(session, phone)
         target = repo.get_user_by_phone(session, target_phone)
         if not target:
-            return f"⚠️ 用户 {target_phone} 不存在。"
+            return f"⚠️ User {target_phone} not found."
         if target.role == "admin" and repo.count_admins(session) <= 1:
-            return "❌ 不能删除最后一个 Admin。"
+            return "❌ Cannot remove the last admin."
         repo.delete_user(session, target)
-        return f"✅ 用户 {target_phone} 已删除，所有数据已清除。"
+        return f"✅ User {target_phone} removed."
 
-    return "未知操作。"
+    return "Unknown action."
 
 
 # ── Commands ───────────────────────────────────────────────────────────────────
@@ -121,60 +120,55 @@ def _cmd_add_user(session: Session, text: str) -> str:
     # /add user +phone [display_name]
     parts = text.split(None, 3)
     if len(parts) < 3:
-        return "用法: /add user +phone [display_name]"
+        return "Usage: /add user +phone [display_name]"
     phone = parts[2]
     display_name = parts[3] if len(parts) > 3 else None
 
     if repo.get_user_by_phone(session, phone):
-        return "⚠️ 该号码已注册"
+        return "⚠️ That number is already registered."
     try:
         user = repo.create_user(session, phone, display_name)
     except ValueError:
-        return "❌ 手机号格式不合法，请使用 E.164 格式（如 +14081234567）"
+        return "❌ Invalid phone number. Use E.164 format (e.g. +14081234567)."
     name_str = f" ({user.display_name})" if user.display_name else ""
-    return f"✅ 用户 {user.phone}{name_str} 已添加"
+    return f"✅ User {user.phone}{name_str} added."
 
 
 def _cmd_remove_user(session: Session, admin, text: str) -> str:
     # /remove user +phone
     parts = text.split(None, 2)
     if len(parts) < 3:
-        return "用法: /remove user +phone"
+        return "Usage: /remove user +phone"
     target_phone = parts[2]
 
     target = repo.get_user_by_phone(session, target_phone)
     if not target:
-        return f"❌ 用户 {target_phone} 不存在"
+        return f"❌ User {target_phone} not found."
     if admin.id == target.id:
-        return "❌ 不能删除自己"
+        return "❌ Cannot remove yourself."
     if target.role == "admin" and repo.count_admins(session) <= 1:
-        return "❌ 不能删除最后一个 Admin"
+        return "❌ Cannot remove the last admin."
 
     _pending_confirmations[admin.phone] = {"action": "remove_user", "target": target_phone}
     return (
-        f"⚠️ 确认删除 {target_phone}？"
-        f"此操作不可逆，所有数据将清除。"
-        f"回复 YES 确认。"
+        f"⚠️ Confirm removal of {target_phone}? "
+        f"This cannot be undone. "
+        f"Reply YES to confirm."
     )
 
 
 def _cmd_list_users(session: Session) -> str:
     users = repo.list_users(session)
     if not users:
-        return "👥 当前没有用户。"
+        return "👥 No users yet."
 
-    # Pre-fetch all families for name lookup
     families = {f.id: f.name for f in repo.list_families(session)}
 
-    lines = [f"👥 当前用户列表（共 {len(users)} 人）："]
+    lines = [f"👥 Users ({len(users)}):"]
     for i, u in enumerate(users, 1):
         name = u.display_name or ""
         role_str = "[admin]" if u.role == "admin" else "[user]"
-        if u.family_id:
-            fam_name = families.get(u.family_id, u.family_id)
-            family_str = f"— {fam_name}"
-        else:
-            family_str = "— 无 Family"
+        family_str = f"— {families.get(u.family_id, u.family_id)}" if u.family_id else "— no family"
         lines.append(f"{i}. {u.phone} {name} {role_str} {family_str}")
     return "\n".join(lines)
 
@@ -183,23 +177,23 @@ def _cmd_set_role(session: Session, admin, text: str) -> str:
     # /set role +phone admin|user
     parts = text.split(None, 3)
     if len(parts) < 4:
-        return "用法: /set role +phone admin|user"
+        return "Usage: /set role +phone admin|user"
     target_phone, new_role = parts[2], parts[3].lower()
 
     if new_role not in ("admin", "user"):
-        return "❌ 角色必须是 admin 或 user"
+        return "❌ Role must be 'admin' or 'user'."
 
     target = repo.get_user_by_phone(session, target_phone)
     if not target:
-        return f"❌ 用户 {target_phone} 不存在"
+        return f"❌ User {target_phone} not found."
     if admin.id == target.id and new_role == "user":
-        return "❌ 不能降级自己"
+        return "❌ Cannot demote yourself."
     if target.role == "admin" and new_role == "user" and repo.count_admins(session) <= 1:
-        return "❌ 不能降级最后一个 Admin"
+        return "❌ Cannot demote the last admin."
 
     repo.update_user(session, target, role=new_role)
-    action = "提升为 Admin" if new_role == "admin" else "降级为普通用户"
-    return f"✅ {target_phone} 已{action}"
+    action = "promoted to admin" if new_role == "admin" else "demoted to user"
+    return f"✅ {target_phone} {action}."
 
 
 def _cmd_create_family(session: Session, admin, text: str) -> str:
@@ -208,74 +202,74 @@ def _cmd_create_family(session: Session, admin, text: str) -> str:
     if not m:
         m = re.match(r"/create\s+family\s+(.+)", text, re.IGNORECASE)
     if not m:
-        return '用法: /create family "Family Name"'
+        return 'Usage: /create family "Family Name"'
     name = m.group(1).strip()
     if not name:
-        return "Family 名称不能为空"
+        return "Family name cannot be empty."
 
     family = repo.create_family(session, name, created_by=admin.id)
-    return f"✅ Family 已创建：{family.name}（ID: {family.id}）"
+    return f"✅ Family created: {family.name} (ID: {family.id})"
 
 
 def _cmd_dissolve_family(session: Session, text: str) -> str:
     # /dissolve family fam_xxx
     parts = text.split(None, 2)
     if len(parts) < 3:
-        return "用法: /dissolve family fam_xxxx"
+        return "Usage: /dissolve family fam_xxxx"
     family_id = parts[2]
 
     family = repo.get_family_by_id(session, family_id)
     if not family:
-        return f"❌ Family {family_id} 不存在"
+        return f"❌ Family {family_id} not found."
 
     repo.delete_family(session, family)
-    return f"✅ Family {family.name} 已解散，成员数据已保留"
+    return f"✅ Family '{family.name}' dissolved. Members' data preserved."
 
 
 def _cmd_family_add(session: Session, text: str) -> str:
     # /family add +phone fam_xxx
     parts = text.split(None, 3)
     if len(parts) < 4:
-        return "用法: /family add +phone fam_xxxx"
+        return "Usage: /family add +phone fam_xxxx"
     target_phone, family_id = parts[2], parts[3]
 
     user = repo.get_user_by_phone(session, target_phone)
     if not user:
-        return f"❌ 用户 {target_phone} 不存在"
+        return f"❌ User {target_phone} not found."
     family = repo.get_family_by_id(session, family_id)
     if not family:
-        return f"❌ Family {family_id} 不存在"
+        return f"❌ Family {family_id} not found."
 
     repo.update_user(session, user, family_id=family_id)
-    return f"✅ {target_phone} 已加入 {family.name}"
+    return f"✅ {target_phone} added to {family.name}."
 
 
 def _cmd_family_remove(session: Session, text: str) -> str:
     # /family remove +phone
     parts = text.split(None, 2)
     if len(parts) < 3:
-        return "用法: /family remove +phone"
+        return "Usage: /family remove +phone"
     target_phone = parts[2]
 
     user = repo.get_user_by_phone(session, target_phone)
     if not user:
-        return f"❌ 用户 {target_phone} 不存在"
+        return f"❌ User {target_phone} not found."
     if not user.family_id:
-        return f"⚠️ {target_phone} 不在任何 Family 中"
+        return f"⚠️ {target_phone} is not in any family."
 
     repo.update_user(session, user, family_id=None)
-    return f"✅ {target_phone} 已从 Family 中移出"
+    return f"✅ {target_phone} removed from their family."
 
 
 def _cmd_list_families(session: Session) -> str:
     families = repo.list_families(session)
     if not families:
-        return "没有 Family。"
+        return "No families yet."
 
-    lines = [f"👨‍👩‍👧 Family 列表（共 {len(families)} 个）："]
+    lines = [f"👨‍👩‍👧 Families ({len(families)}):"]
     for i, f in enumerate(families, 1):
         members = repo.get_family_members(session, f.id)
-        lines.append(f"{i}. {f.name}（{len(members)} 人，ID: {f.id}）")
+        lines.append(f"{i}. {f.name} — {len(members)} member(s), ID: {f.id}")
     return "\n".join(lines)
 
 
@@ -287,9 +281,9 @@ def _cmd_status(session: Session) -> str:
         f"{a.phone} {a.display_name or ''}".strip() for a in admins
     )
     return (
-        "📊 Alfred 系统状态\n"
-        f"用户总数：{len(users)}\n"
-        f"Family 总数：{len(families)}\n"
-        f"Admin：{admin_list}\n"
-        "版本：v1.0"
+        "📊 Alfred status\n"
+        f"Users: {len(users)}\n"
+        f"Families: {len(families)}\n"
+        f"Admins: {admin_list}\n"
+        "Version: v1.0"
     )

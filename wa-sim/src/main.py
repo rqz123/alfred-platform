@@ -11,11 +11,15 @@ Modes
   --concurrent          Run all 5 phone groups IN PARALLEL (most realistic stress test)
   --scenario NAME       Run a single named scenario once, then exit
   --group GROUP         Run all scenarios in one group sequentially, then exit
+  --daemon              Run random scenarios forever; auto-ack reminder pushes between runs
+                        Stop with Ctrl-C or:  python -m src.main --stop
 
 Options
 -------
   --loop N              (with --auto / --concurrent) repeat each group N random picks
                         instead of running every scenario once
+  --interval N          (with --daemon) seconds between scenario runs (default: 30)
+  --stop                Send SIGTERM to a running daemon and exit
   --auto-register       Insert a WhatsAppConnection row in the Gateway DB (needs DB_PATH)
 
 Output
@@ -27,6 +31,9 @@ Output
 import argparse
 import asyncio
 import logging
+import os
+import random
+import signal
 import sqlite3
 import sys
 import threading
@@ -49,6 +56,36 @@ from .scenarios import (
     _wait_for_reply,
 )
 from .virtual_phone import DEFAULT_PHONES, VirtualPhone
+
+PID_FILE = Path(__file__).parent.parent / "wa-sim.pid"
+
+
+# ── PID helpers ────────────────────────────────────────────────────
+
+def _write_pid() -> None:
+    PID_FILE.write_text(str(os.getpid()))
+
+
+def _remove_pid() -> None:
+    PID_FILE.unlink(missing_ok=True)
+
+
+def _stop_daemon() -> None:
+    if not PID_FILE.exists():
+        print("No daemon PID file found — is it running?")
+        return
+    try:
+        pid = int(PID_FILE.read_text().strip())
+    except ValueError:
+        print("Invalid PID file — removing.")
+        _remove_pid()
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+        print(f"Sent SIGTERM to daemon (PID {pid})")
+    except ProcessLookupError:
+        print(f"Daemon (PID {pid}) not found — removing stale PID file.")
+        _remove_pid()
 
 
 # ── Bridge startup ─────────────────────────────────────────────────
@@ -85,9 +122,9 @@ def _auto_register_db() -> None:
             db.close()
             return
         cur.execute(
-            "INSERT INTO whatsappconnection (id, bridge_session_id, label, created_at) "
-            "VALUES (?, ?, ?, datetime('now'))",
-            (uuid.uuid4().hex, settings.SESSION_ID, "wa-sim"),
+            "INSERT INTO whatsappconnection (bridge_session_id, label, created_at) "
+            "VALUES (?, ?, datetime('now'))",
+            (settings.SESSION_ID, "wa-sim"),
         )
         db.commit()
         db.close()
@@ -207,6 +244,95 @@ async def run_single_group(
     _print_group_summary(summary)
 
 
+# ── Daemon mode ────────────────────────────────────────────────────
+
+def _is_reminder_push(body: str) -> bool:
+    """True if the message looks like a nudge reminder push (needs an 'ok' ack)."""
+    lower = body.lower()
+    return "reply" in lower and "confirm" in lower
+
+
+async def run_daemon(
+    phones: list[VirtualPhone],
+    interval: float,
+    group: str | None,
+) -> None:
+    """Run random scenarios forever, auto-acking reminder pushes between runs."""
+    from .bridge_mock import reply_queue
+    from . import gateway_client as _gwc
+
+    scenarios = load_scenarios()
+    names = _phone_names(phones)
+    sid = settings.SESSION_ID
+    phone_map = {p.phone: p for p in phones}
+
+    loop = asyncio.get_event_loop()
+    stop_event = asyncio.Event()
+    loop.add_signal_handler(signal.SIGTERM, stop_event.set)
+
+    ui.log_info(f"Daemon  interval=~{interval} min (random ±50%)  group={group or 'all'}")
+    ui.log_info("Stop:  Ctrl-C  or  python -m src.main --stop\n")
+
+    total = passed = failed = 0
+
+    async def _ack_pending_pushes() -> None:
+        """Drain reply_queue and auto-ack any reminder push notifications."""
+        while True:
+            try:
+                phone, body = reply_queue.get_nowait()
+                if _is_reminder_push(body):
+                    ui.log_reply(phone, body)
+                    p = phone_map.get(phone)
+                    if p:
+                        ui.log_sent(phone, "ok  [auto-ack]")
+                        try:
+                            await _gwc.send_message(phone, p.name, "ok", session_id=sid)
+                        except Exception as exc:
+                            ui.log_error(f"Auto-ack failed: {exc}")
+                # Non-push replies between scenarios are stale — discard silently.
+            except asyncio.QueueEmpty:
+                break
+
+    async def _wait_interval() -> None:
+        """Wait a random duration around `interval` minutes, polling for pushes every 2 s."""
+        lo = max(interval * 0.5, 0.5)   # at least 30 s
+        hi = interval * 1.5
+        wait_min = random.uniform(lo, hi)
+        wait_secs = wait_min * 60
+        ui.log_info(f"Next scenario in {wait_min:.1f} min …")
+        deadline = loop.time() + wait_secs
+        while not stop_event.is_set():
+            await _ack_pending_pushes()
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=min(2.0, remaining))
+            except asyncio.TimeoutError:
+                pass
+
+    try:
+        while not stop_event.is_set():
+            scenario = pick_scenario(scenarios, group=group)
+            ui.log_info(f"\n── {scenario['name']}  ({scenario['group']}) ──")
+            result = await run_scenario(scenario, session_id=sid, phone_names=names)
+            total += 1
+            if result:
+                passed += 1
+                ui.log_success(f"PASS  {passed}/{total}")
+            else:
+                failed += 1
+                ui.log_error(f"FAIL  {passed}/{total}  ({failed} failures)")
+            if not stop_event.is_set():
+                await _wait_interval()
+    except asyncio.CancelledError:
+        pass
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
+        _remove_pid()
+        ui.log_info(f"\nDaemon stopped — {passed}/{total} passed, {failed} failed.")
+
+
 # ── Interactive mode ───────────────────────────────────────────────
 
 async def run_interactive(phones: list[VirtualPhone]) -> None:
@@ -304,12 +430,15 @@ async def _main(args: argparse.Namespace) -> None:
 
     if args.scenario:
         await run_single_scenario(args.scenario, phones)
-    elif args.group:
-        await run_single_group(args.group, phones, loop_count=args.loop)
+    elif args.daemon:
+        _write_pid()
+        await run_daemon(phones, interval=args.interval, group=args.group)
     elif args.concurrent:
         await run_concurrent(phones, loop_count=args.loop)
     elif args.auto:
         await run_auto_sequential(phones, loop_count=args.loop)
+    elif args.group:
+        await run_single_group(args.group, phones, loop_count=args.loop)
     else:
         await run_interactive(phones)
 
@@ -326,16 +455,30 @@ def main() -> None:
                       help="Run all 5 groups in parallel (stress test)")
     mode.add_argument("--scenario", metavar="NAME",
                       help="Run a single named scenario and exit")
-    mode.add_argument("--group", metavar="GROUP",
-                      help="Run all scenarios in one group (finance/reminders/notes/chat/errors)")
+    mode.add_argument("--daemon", action="store_true",
+                      help="Run random scenarios forever; auto-ack reminder pushes between runs")
 
+    parser.add_argument("--group", metavar="GROUP",
+                        help="With --daemon: filter to this group. "
+                             "Standalone: run all scenarios in the group once and exit. "
+                             "(finance / reminders / notes / chat / errors)")
     parser.add_argument("--loop", type=int, default=0, metavar="N",
                         help="With --auto/--concurrent: pick N random scenarios per group "
                              "instead of running each once (0 = run each once)")
+    parser.add_argument("--interval", type=float, default=5.0, metavar="N",
+                        help="With --daemon: average minutes between scenario runs (default: 5, "
+                             "actual wait is random ±50%%)")
+    parser.add_argument("--stop", action="store_true",
+                        help="Stop a running daemon and exit")
     parser.add_argument("--auto-register", action="store_true",
                         help="Insert WhatsAppConnection row in Gateway DB (needs DB_PATH in .env)")
 
     args = parser.parse_args()
+
+    if args.stop:
+        _stop_daemon()
+        return
+
     logging.basicConfig(level=logging.WARNING)
     asyncio.run(_main(args))
 

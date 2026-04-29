@@ -58,7 +58,10 @@ def bootstrap(
 # ── Users ──────────────────────────────────────────────────────────────────────
 
 def get_user_by_phone(session: Session, phone: str) -> Optional[AlfredUser]:
-    return session.exec(select(AlfredUser).where(AlfredUser.phone == phone)).first()
+    user = session.exec(select(AlfredUser).where(AlfredUser.phone == phone)).first()
+    if user is None and not phone.startswith("+"):
+        user = session.exec(select(AlfredUser).where(AlfredUser.phone == "+" + phone)).first()
+    return user
 
 
 def get_user_by_id(session: Session, user_id: str) -> Optional[AlfredUser]:

@@ -65,6 +65,7 @@ export default function Receipts() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  const [daysFilter, setDaysFilter] = useState<number | null>(null);
   const [selected, setSelected] = useState<Receipt | null>(null);
   const [detail, setDetail] = useState<ReceiptDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -83,19 +84,19 @@ export default function Receipts() {
 
   function loadReceipts(silent = false) {
     if (!silent) setLoading(true);
-    listReceipts({ status_filter: statusFilter || undefined })
+    listReceipts({ status_filter: statusFilter || undefined, days_back: daysFilter ?? undefined })
       .then((rows) => setReceipts(rows as unknown as Receipt[]))
       .catch((e: Error) => setError(e.message))
       .finally(() => setLoading(false));
   }
 
-  useEffect(() => { loadReceipts(); }, [statusFilter]);
+  useEffect(() => { loadReceipts(); }, [statusFilter, daysFilter]);
 
   // Auto-refresh every 30s without showing the loading spinner
   useEffect(() => {
     const id = setInterval(() => loadReceipts(true), 30_000);
     return () => clearInterval(id);
-  }, [statusFilter]);
+  }, [statusFilter, daysFilter]);
 
   // fetch image as blob (needs auth header)
   useEffect(() => {
@@ -184,11 +185,29 @@ export default function Receipts() {
       <div style={{ width: selected ? 320 : "100%", flexShrink: 0, borderRight: "1px solid #e2e8f0", display: "flex", flexDirection: "column", overflow: "hidden" }}>
 
         {/* Toolbar */}
-        <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0", display: "flex", gap: "0.5rem", alignItems: "center" }}>
+        <div style={{ padding: "0.9rem 1rem", borderBottom: "1px solid #e2e8f0", display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
           <h2 style={{ margin: 0, fontSize: "1.05rem", flex: 1 }}>Receipts</h2>
+
+          {/* Date range segmented control */}
+          <div style={{ display: "flex", borderRadius: 4, border: "1px solid #e2e8f0", overflow: "hidden" }}>
+            {([7, 30, 90, null] as (number | null)[]).map((d) => {
+              const active = daysFilter === d;
+              return (
+                <button key={d ?? "all"} onClick={() => setDaysFilter(d)}
+                  style={{ padding: "0.25rem 0.5rem", border: "none",
+                    borderRight: d !== null ? "1px solid #e2e8f0" : "none",
+                    background: active ? "#6366f1" : "white",
+                    color: active ? "white" : "#64748b",
+                    cursor: "pointer", fontSize: "0.78rem", fontWeight: active ? 600 : 400 }}>
+                  {d ? `${d}d` : "All"}
+                </button>
+              );
+            })}
+          </div>
+
           <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
             style={{ padding: "0.25rem 0.4rem", borderRadius: 4, border: "1px solid #e2e8f0", fontSize: "0.82rem" }}>
-            <option value="">All</option>
+            <option value="">All status</option>
             <option value="pending">Pending</option>
             <option value="confirmed">Confirmed</option>
             <option value="rejected">Rejected</option>
