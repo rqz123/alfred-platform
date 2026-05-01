@@ -50,6 +50,9 @@ export default function SettingsPage() {
       }
       const phone = phoneInput.trim();
       localStorage.setItem("alfred_admin_phone", phone);
+      const raw = localStorage.getItem("alfred_user");
+      const username = raw ? JSON.parse(raw).username : null;
+      if (username) localStorage.setItem(`alfred_phone_${username}`, phone);
       setAlfredPhone(phone);
       setPhoneInput("");
       setPhoneMsg("Phone linked!");
@@ -221,7 +224,13 @@ export default function SettingsPage() {
             {nameMsg && <p style={{ color: "#16a34a", fontSize: "0.875rem", margin: "0.5rem 0 0" }}>{nameMsg}</p>}
             <button
               style={{ marginTop: "1rem", background: "none", border: "none", color: "#94a3b8", fontSize: "0.8rem", cursor: "pointer", padding: 0 }}
-              onClick={() => { localStorage.removeItem("alfred_admin_phone"); setAlfredPhone(""); setAlfredMe(null); }}
+              onClick={() => {
+                localStorage.removeItem("alfred_admin_phone");
+                const raw = localStorage.getItem("alfred_user");
+                const username = raw ? JSON.parse(raw).username : null;
+                if (username) localStorage.removeItem(`alfred_phone_${username}`);
+                setAlfredPhone(""); setAlfredMe(null);
+              }}
             >
               Unlink phone
             </button>

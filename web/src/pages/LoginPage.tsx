@@ -14,6 +14,8 @@ export default function LoginPage() {
       const result = await gatewayLogin(creds);
       localStorage.setItem("alfred_token", result.access_token);
       localStorage.setItem("alfred_user", JSON.stringify(result));
+      const savedPhone = localStorage.getItem(`alfred_phone_${result.username}`);
+      if (savedPhone) localStorage.setItem("alfred_admin_phone", savedPhone);
 
       // Auto-login to OurCents with the same credentials.
       // register() is a no-op if already registered.
