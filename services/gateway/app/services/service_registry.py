@@ -8,6 +8,8 @@ from pathlib import Path
 
 import yaml
 
+from app.core.config import get_settings
+
 logger = logging.getLogger('alfred.registry')
 
 
@@ -32,9 +34,12 @@ class ServiceRegistry:
             self._map: dict[str, dict] = {}
             return
 
+        settings = get_settings()
         self._map = {}
         for svc_id, svc in cfg.get('services', {}).items():
-            api_key = os.environ.get(svc.get('api_key_env', ''), '')
+            api_key_env = svc.get('api_key_env', '')
+            # pydantic-settings reads .env file + env vars; os.environ fallback for unknown keys
+            api_key = getattr(settings, api_key_env.lower(), None) or os.environ.get(api_key_env, '')
             # url_env allows Docker deployments to override localhost URLs
             # e.g. OURCENTS_URL=http://ourcents:8001 overrides services.yaml default
             url = os.environ.get(svc.get('url_env', ''), '') or svc.get('url', '')

@@ -6,8 +6,13 @@ admin record.  The resolve endpoint is open (internal network only).
 Bootstrap is open and idempotent-guarded (rejects after first use).
 """
 
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+import logging
+
+import httpx
+from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
 from sqlmodel import Session
+
+logger = logging.getLogger("alfred.account_routes")
 
 import app.repositories.account_repository as repo
 from app.db.session import get_session
@@ -291,3 +296,39 @@ def delete_family(
             detail={"code": "FAMILY_NOT_FOUND", "message": f"Family {family_id} not found"},
         )
     repo.delete_family(session, family)
+
+
+# ── Danger zone ────────────────────────────────────────────────────────────────
+
+@alfred_router.delete("/admin/clear-all-data", status_code=status.HTTP_204_NO_CONTENT)
+def clear_all_data(
+    admin: AlfredUser = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Clear all chat conversations, receipts, and notes. Preserves all user/family/admin records."""
+    from app.repositories.chat_repository import delete_all_conversations
+    from app.services.service_registry import ServiceRegistry
+
+    # 1. Clear gateway chat
+    delete_all_conversations(session)
+
+    # 2. Clear OurCents receipts and income entries
+    # 3. Clear nudge notes
+    registry = ServiceRegistry()
+    _clear_service(registry, intent="add_expense", path="/alfred/admin/clear")
+    _clear_service(registry, intent="add_reminder", path="/alfred/admin/clear")
+
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _clear_service(registry, intent: str, path: str) -> None:
+    svc = registry.find_service(intent)
+    if not svc:
+        return
+    url = svc["url"].rstrip("/") + path
+    try:
+        r = httpx.delete(url, headers={"X-Alfred-Api-Key": svc["api_key"]}, timeout=10.0)
+        if r.status_code not in (200, 204):
+            logger.warning("clear_all_data: %s returned %d", url, r.status_code)
+    except Exception as exc:
+        logger.warning("clear_all_data: failed to reach %s: %s", url, exc)

@@ -37,10 +37,20 @@ export interface ParseResponse {
   nextFireAt?: string | null;
 }
 
+export interface NoteEntities {
+  people: string[];
+  places: string[];
+  orgs: string[];
+}
+
 export interface Note {
   id: string;
+  shortId?: number | null;
+  title?: string | null;
   content: string;
   tags?: string[] | null;
+  entities?: NoteEntities | null;
+  relatedIds?: number[] | null;
   triggerSource?: string | null;
   status: "active" | "archived";
   createdAt: string;

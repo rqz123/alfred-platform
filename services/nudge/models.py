@@ -47,8 +47,12 @@ class NoteCreate(BaseModel):
 
 class NoteOut(BaseModel):
     id: str
+    shortId: Optional[int] = None
+    title: Optional[str] = None
     content: str
     tags: Optional[list[str]] = None
+    entities: Optional[dict] = None
+    relatedIds: Optional[list[int]] = None
     triggerSource: Optional[str] = None
     status: str
     createdAt: str

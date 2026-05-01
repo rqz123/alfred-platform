@@ -324,6 +324,163 @@ scenarios:
         send: "笔记"
         # Alfred should NOT save an empty note; likely chat or 'none' response
 
+  # ── New design (v1.2): natural-language event creation ─────────
+  - name: add_note_event_statement
+    group: notes
+    weight: 2
+    description: "Natural-language event statement without trigger word → note_create intent"
+    steps:
+      - phone: "+18005550003"
+        send: "今天和王医生复诊，血压恢复正常，三个月后复查"
+        expect_contains: "#"
+
+  - name: add_note_event_english
+    group: notes
+    weight: 1
+    description: "English natural-language event statement → note_create intent"
+    steps:
+      - phone: "+18005550003"
+        send: "met the architect today about the kitchen renovation — he quoted $8k"
+        expect_contains: "#"
+
+  # ── /note bot commands ─────────────────────────────────────────
+  - name: add_note_slash_cmd
+    group: notes
+    weight: 2
+    description: "Explicit /note <content> bot command"
+    steps:
+      - phone: "+18005550003"
+        send: "/note 参加了Q2规划会议，重点目标是用户增长30%"
+        expect_contains: "note"
+
+  - name: note_slash_list_n
+    group: notes
+    weight: 1
+    description: "/note list N — list last N notes via bot command"
+    steps:
+      - phone: "+18005550003"
+        send: "/note list 3"
+
+  - name: note_slash_get
+    group: notes
+    weight: 1
+    description: "/note get #<id> — view note detail by short_id"
+    steps:
+      - phone: "+18005550003"
+        send: "/note get #1"
+
+  - name: note_slash_delete_confirm
+    group: notes
+    weight: 1
+    description: "/note delete #<id> then confirm Y — two-turn deletion flow"
+    steps:
+      - phone: "+18005550003"
+        send: "/note delete #1"
+      - phone: "+18005550003"
+        send: "Y"
+
+  # ── /find command ──────────────────────────────────────────────
+  - name: note_find_slash_chinese
+    group: notes
+    weight: 2
+    description: "/find <query> — explicit search command in Chinese"
+    steps:
+      - phone: "+18005550003"
+        send: "/find 医生"
+
+  - name: note_find_slash_english
+    group: notes
+    weight: 1
+    description: "/find <query> — explicit search command in English"
+    steps:
+      - phone: "+18005550003"
+        send: "/find renovation"
+
+  - name: note_question_search
+    group: notes
+    weight: 1
+    description: "Natural-language question → question intent → note search"
+    steps:
+      - phone: "+18005550003"
+        send: "上次我去看医生是什么时候？"
+
+  # ── /link commands ─────────────────────────────────────────────
+  - name: note_link_cmd
+    group: notes
+    weight: 1
+    description: "/link #<id_A> #<id_B> — manually link two notes"
+    steps:
+      - phone: "+18005550003"
+        send: "/link #1 #2"
+
+  - name: note_unlink_cmd
+    group: notes
+    weight: 1
+    description: "/unlink #<id_A> #<id_B> — remove link between two notes"
+    steps:
+      - phone: "+18005550003"
+        send: "/unlink #1 #2"
+
+  - name: note_links_view_cmd
+    group: notes
+    weight: 1
+    description: "/note links #<id> — view all links for a note"
+    steps:
+      - phone: "+18005550003"
+        send: "/note links #1"
+
+
+  # ── Entity correlation tests ───────────────────────────────────
+  - name: note_entity_correlation_health
+    group: notes
+    weight: 2
+    description: "Two sequential notes about same doctor — second reply shows history"
+    steps:
+      - phone: "+18005550003"
+        send: "今天和王医生复诊，血压恢复正常，三个月后复查"
+        expect_contains: "#"
+      - phone: "+18005550003"
+        pause: 5.0
+        send: "note: 王医生说要继续监测血压，每周测量两次"
+        expect_contains: "#"
+
+  - name: note_entity_correlation_work
+    group: notes
+    weight: 1
+    description: "Two notes about same project/person — second should surface history"
+    steps:
+      - phone: "+18005550003"
+        send: "met the architect today about the kitchen renovation — he quoted $8k"
+        expect_contains: "#"
+      - phone: "+18005550003"
+        pause: 5.0
+        send: "note: architect called back, can start renovation next month"
+        expect_contains: "#"
+
+  - name: note_save_then_get
+    group: notes
+    weight: 2
+    description: "Save a note then retrieve it by short_id"
+    steps:
+      - phone: "+18005550003"
+        send: "记一下：明天要交水电费，金额是$85"
+        expect_contains: "#"
+      - phone: "+18005550003"
+        pause: 2.0
+        send: "/note list 3"
+
+  - name: note_save_then_find
+    group: notes
+    weight: 2
+    description: "Save a note then search for it"
+    steps:
+      - phone: "+18005550003"
+        send: "jot dentist appointment scheduled for June 15th at 3pm"
+        expect_contains: "#"
+      - phone: "+18005550003"
+        pause: 2.0
+        send: "/find dentist"
+
 
   # ── GROUP: chat ───────────────────────────────────────────────
   # Dave (+18005550004) tests general conversational messages
@@ -387,6 +544,32 @@ scenarios:
     steps:
       - phone: "+18005550004"
         send: "I've been thinking about managing my finances better this year. Do you have any tips on how to track expenses consistently without it feeling like a chore?"
+
+  - name: expense_then_note_followup
+    group: chat
+    weight: 1
+    description: "Record expense then jot a follow-up note"
+    steps:
+      - phone: "+18005550004"
+        send: "spent $250 on car repair"
+        expect_contains: "250"
+      - phone: "+18005550004"
+        pause: 2.0
+        send: "note: need to claim insurance reimbursement for car repair"
+        expect_contains: "#"
+
+  - name: multi_intent_session
+    group: chat
+    weight: 1
+    description: "Reminder then note in same session — tests session isolation"
+    steps:
+      - phone: "+18005550004"
+        send: "remind me to call the bank tomorrow at 10am"
+        expect_contains: "reminder"
+      - phone: "+18005550004"
+        pause: 3.0
+        send: "note: bank account might have overdraft fee, check statement"
+        expect_contains: "#"
 
 
   # ── GROUP: errors ──────────────────────────────────────────────
@@ -505,3 +688,35 @@ scenarios:
     steps:
       - phone: "+18005550005"
         send: "账户余额"
+
+  - name: note_get_nonexistent
+    group: errors
+    weight: 1
+    description: "/note get with non-existent short_id — graceful not-found response"
+    steps:
+      - phone: "+18005550005"
+        send: "/note get #99999"
+
+  - name: note_link_same_id
+    group: errors
+    weight: 1
+    description: "/link a note to itself — should be rejected (schema CHECK constraint)"
+    steps:
+      - phone: "+18005550005"
+        send: "/link #1 #1"
+
+  - name: note_delete_nonexistent
+    group: errors
+    weight: 1
+    description: "/note delete with non-existent short_id — graceful not-found"
+    steps:
+      - phone: "+18005550005"
+        send: "/note delete #99999"
+
+  - name: note_find_empty_query
+    group: errors
+    weight: 1
+    description: "/find with no search term — should ask for a query, not crash"
+    steps:
+      - phone: "+18005550005"
+        send: "/find"

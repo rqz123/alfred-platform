@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Any, Optional
@@ -14,10 +15,10 @@ if _monorepo_root not in sys.path:
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, insert, update, delete
+from sqlalchemy import select, insert, update, delete, func
 
 from shared.auth import make_verify_token, TokenPayload
-from database import engine, reminders, notes
+from database import engine, reminders, notes, note_links
 from models import (
     ParseRequest, ParseResponse, ParsedReminder,
     ReminderCreate, ReminderOut, ReminderUpdate,
@@ -151,15 +152,87 @@ async def delete_reminder(
 # Note REST endpoints
 # ─────────────────────────────────────────────────────
 
+def _build_note_out(row, all_rows: list, all_links: list) -> NoteOut:
+    """Build NoteOut with shortId, title, entities, and computed relatedIds."""
+    note_id = row["id"]
+    phone = row.get("triggerSource")
+
+    explicit_ids: set[str] = set()
+    for lnk in all_links:
+        if lnk["note_id"] == note_id:
+            explicit_ids.add(lnk["linked_note_id"])
+        elif lnk["linked_note_id"] == note_id:
+            explicit_ids.add(lnk["note_id"])
+
+    ents = row.get("entities") or {}
+    if isinstance(ents, str):
+        try:
+            ents = json.loads(ents)
+        except Exception:
+            ents = {}
+
+    my_ents: set[str] = set()
+    for v in ents.values():
+        my_ents.update(v)
+
+    entity_related_ids: set[str] = set()
+    if my_ents and phone:
+        for r in all_rows:
+            if r["id"] == note_id or r.get("triggerSource") != phone:
+                continue
+            r_ents = r.get("entities") or {}
+            if isinstance(r_ents, str):
+                try:
+                    r_ents = json.loads(r_ents)
+                except Exception:
+                    r_ents = {}
+            r_all: set[str] = set()
+            for v in r_ents.values():
+                r_all.update(v)
+            if my_ents & r_all:
+                entity_related_ids.add(r["id"])
+
+    id_to_short = {r["id"]: r.get("shortId") for r in all_rows}
+    all_related = explicit_ids | entity_related_ids
+    related_short_ids = sorted(
+        [sid for nid in all_related if (sid := id_to_short.get(nid)) is not None]
+    )
+
+    return NoteOut(
+        id=note_id,
+        shortId=row.get("shortId"),
+        title=row.get("title"),
+        content=row["content"],
+        tags=row.get("tags"),
+        entities=ents if any(ents.values()) else None,
+        relatedIds=related_short_ids or None,
+        triggerSource=phone,
+        status=row["status"],
+        createdAt=row["createdAt"],
+        updatedAt=row["updatedAt"],
+    )
+
+
 @router.post("/notes", response_model=NoteOut)
 async def create_note(data: NoteCreate, _: TokenPayload = Depends(verify_token)):
     now = datetime.now(timezone.utc).isoformat()
     note_id = str(uuid.uuid4())
+    phone = data.triggerSource
+    next_short_id: Optional[int] = None
+    if phone:
+        with engine.connect() as conn:
+            max_sid = conn.execute(
+                select(func.max(notes.c.shortId)).where(notes.c.triggerSource == phone)
+            ).scalar()
+        next_short_id = (max_sid or 0) + 1
     row = {
         "id": note_id,
+        "shortId": next_short_id,
+        "title": None,
         "content": data.content,
         "tags": data.tags,
-        "triggerSource": data.triggerSource,
+        "entities": None,
+        "triggerSource": phone,
         "status": "active",
         "createdAt": now,
         "updatedAt": now,
@@ -176,9 +249,9 @@ async def list_notes_endpoint(
     _: TokenPayload = Depends(verify_token),
 ):
     with engine.connect() as conn:
-        query = select(notes).order_by(notes.c.createdAt.desc())
-        rows = conn.execute(query).mappings().all()
-    result = [NoteOut(**dict(r)) for r in rows]
+        all_rows = conn.execute(select(notes).order_by(notes.c.createdAt.desc())).mappings().all()
+        all_lnks = conn.execute(select(note_links)).mappings().all()
+    result = [_build_note_out(r, all_rows, all_lnks) for r in all_rows]
     if status:
         result = [n for n in result if n.status == status]
     return result
@@ -247,6 +320,15 @@ def _taken_names(phone: str | None = None) -> set[str]:
 def _verify_alfred_key(x_alfred_api_key: str | None = Header(default=None)) -> None:
     if not _ALFRED_API_KEY or x_alfred_api_key != _ALFRED_API_KEY:
         raise HTTPException(status_code=401, detail="Invalid Alfred API key")
+
+
+@router.delete("/alfred/admin/clear", status_code=204, dependencies=[Depends(_verify_alfred_key)])
+async def admin_clear_notes():
+    """Clear all notes and reminders."""
+    with engine.connect() as conn:
+        conn.execute(delete(notes))
+        conn.execute(delete(reminders))
+        conn.commit()
 
 
 class AlfredExecuteRequest(BaseModel):
@@ -562,13 +644,63 @@ async def alfred_execute(req: AlfredExecuteRequest):
                 error_code="INSUFFICIENT_DATA",
                 message="What would you like me to note down?",
             )
+
+        phone = req.whatsapp_id
+
+        # Assign per-user short ID
+        with engine.connect() as conn:
+            max_sid = conn.execute(
+                select(func.max(notes.c.shortId)).where(notes.c.triggerSource == phone)
+            ).scalar()
+        next_short_id = (max_sid or 0) + 1
+
+        # Extract entities + generate title via LLM — best-effort, single call
+        note_entities: dict = {"people": [], "places": [], "orgs": []}
+        note_title = ""
+        try:
+            from services.parser import get_client
+            client = get_client()
+            ent_resp = await client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            'Analyze this note. Return JSON with:\n'
+                            '- "title": very brief title (max 8 words or 10 Chinese chars, no quotes or punctuation)\n'
+                            '- "people": array of person names explicitly mentioned\n'
+                            '- "places": array of places explicitly mentioned\n'
+                            '- "orgs": array of organizations explicitly mentioned\n'
+                            'Use empty arrays if none. Example: '
+                            '{"title": "王医生复诊血压正常", "people": ["王医生"], "places": [], "orgs": []}'
+                        ),
+                    },
+                    {"role": "user", "content": content},
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=150,
+                timeout=8.0,
+            )
+            extracted = json.loads(ent_resp.choices[0].message.content)
+            note_entities = {
+                "people": extracted.get("people", []),
+                "places": extracted.get("places", []),
+                "orgs":   extracted.get("orgs", []),
+            }
+            note_title = (extracted.get("title") or "").strip()
+        except Exception:
+            pass
+
         now = datetime.now(timezone.utc).isoformat()
         note_id = str(uuid.uuid4())
         row = {
             "id": note_id,
+            "shortId": next_short_id,
+            "title": note_title or None,
             "content": content,
             "tags": None,
-            "triggerSource": req.whatsapp_id,
+            "entities": note_entities,
+            "triggerSource": phone,
             "status": "active",
             "createdAt": now,
             "updatedAt": now,
@@ -576,20 +708,91 @@ async def alfred_execute(req: AlfredExecuteRequest):
         with engine.connect() as conn:
             conn.execute(insert(notes).values(**row))
             conn.commit()
+
         preview = content[:50] + ("…" if len(content) > 50 else "")
+        reply = f"\u270f\ufe0f Note #{next_short_id}: {preview}"
+
+        # Entity correlation: surface related historical notes
+        all_ents = (
+            note_entities.get("people", []) +
+            note_entities.get("places", []) +
+            note_entities.get("orgs", [])
+        )
+        if all_ents:
+            with engine.connect() as conn:
+                past_rows = conn.execute(
+                    select(notes)
+                    .where(
+                        notes.c.status == "active",
+                        notes.c.triggerSource == phone,
+                        notes.c.id != note_id,
+                    )
+                    .order_by(notes.c.createdAt.desc())
+                    .limit(30)
+                ).mappings().all()
+
+            related = []
+            for r in past_rows:
+                r_ents = r.get("entities") or {}
+                if isinstance(r_ents, str):
+                    try:
+                        r_ents = json.loads(r_ents)
+                    except Exception:
+                        r_ents = {}
+                r_all = r_ents.get("people", []) + r_ents.get("places", []) + r_ents.get("orgs", [])
+                if any(e in r_all for e in all_ents):
+                    related.append(r)
+                    if len(related) >= 3:
+                        break
+
+            if related:
+                entity_label = all_ents[0]
+                for e in all_ents:
+                    for r in related:
+                        r_ents = r.get("entities") or {}
+                        if isinstance(r_ents, str):
+                            try:
+                                r_ents = json.loads(r_ents)
+                            except Exception:
+                                r_ents = {}
+                        if e in (r_ents.get("people", []) + r_ents.get("places", []) + r_ents.get("orgs", [])):
+                            entity_label = e
+                            break
+
+                tz_local = pytz.timezone(_DEFAULT_TZ)
+                history_lines = []
+                for r in related:
+                    try:
+                        dt = datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00"))
+                        if dt.tzinfo is None:
+                            dt = dt.replace(tzinfo=timezone.utc)
+                        date_str = dt.astimezone(tz_local).strftime("%-m/%-d")
+                    except Exception:
+                        date_str = "?"
+                    snippet = r["content"][:60] + ("…" if len(r["content"]) > 60 else "")
+                    sid = r.get("shortId")
+                    sid_str = f"#{sid} " if sid else ""
+                    history_lines.append(f"  • {date_str}: {sid_str}{snippet}")
+
+                reply += (
+                    f"\n\n\U0001f4cb About \u300c{entity_label}\u300d"
+                    f" — {len(related)} related note(s):\n"
+                    + "\n".join(history_lines)
+                )
+
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
-            message=f"\u270f\ufe0f Noted: {preview}",
+            message=reply,
         )
-
     if req.intent == "list_notes":
         phone = req.whatsapp_id
+        limit = min(int(req.entities.get("limit") or 10), 20)
         with engine.connect() as conn:
             rows = conn.execute(
                 select(notes)
                 .where(notes.c.status == "active", notes.c.triggerSource == phone)
                 .order_by(notes.c.createdAt.desc())
-                .limit(10)
+                .limit(limit)
             ).mappings().all()
         if not rows:
             return AlfredExecuteResponse(
@@ -598,7 +801,7 @@ async def alfred_execute(req: AlfredExecuteRequest):
             )
         tz = pytz.timezone(_DEFAULT_TZ)
         lines = []
-        for i, r in enumerate(rows, 1):
+        for r in rows:
             try:
                 dt = datetime.fromisoformat(r["createdAt"].replace("Z", "+00:00"))
                 if dt.tzinfo is None:
@@ -606,11 +809,14 @@ async def alfred_execute(req: AlfredExecuteRequest):
                 date_str = dt.astimezone(tz).strftime("%-m/%-d")
             except Exception:
                 date_str = ""
-            preview = r["content"][:60] + ("…" if len(r["content"]) > 60 else "")
-            lines.append(f"{i}. {preview} ({date_str})")
+            sid = r.get("shortId")
+            sid_str = f"#{sid} " if sid else ""
+            content_val = r["content"]
+            preview = content_val[:55] + ("…" if len(content_val) > 55 else "")
+            lines.append(f"  {sid_str}{preview} ({date_str})")
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
-            message="Your notes:\n" + "\n".join(lines),
+            message=("Your {} note(s):\n".format(len(rows)) + "\n".join(lines)),
         )
 
     if req.intent == "search_notes":
@@ -672,6 +878,201 @@ async def alfred_execute(req: AlfredExecuteRequest):
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message=answer,
+        )
+
+
+    if req.intent == "note_get":
+        short_id = req.entities.get("short_id")
+        if short_id is None:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                message="Which note? Usage: /note get #<id>",
+            )
+        phone = req.whatsapp_id
+        with engine.connect() as conn:
+            row = conn.execute(
+                select(notes).where(
+                    notes.c.shortId == int(short_id),
+                    notes.c.triggerSource == phone,
+                    notes.c.status == "active",
+                )
+            ).mappings().first()
+        if row is None:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                message=f"Note #{short_id} not found.",
+            )
+        tz_local = pytz.timezone(_DEFAULT_TZ)
+        try:
+            dt = datetime.fromisoformat(row["createdAt"].replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            date_str = dt.astimezone(tz_local).strftime("%-m/%-d at %-I:%M %p %Z")
+        except Exception:
+            date_str = row["createdAt"]
+        ents = row.get("entities") or {}
+        if isinstance(ents, str):
+            try:
+                ents = json.loads(ents)
+            except Exception:
+                ents = {}
+        ent_parts = [", ".join(v) for v in ents.values() if v]
+        msg = "\U0001f4dd Note #{} [{}]\n{}".format(short_id, date_str, row['content'])
+        if ent_parts:
+            msg += "\n\U0001f511 {}".format(" \u00b7 ".join(ent_parts))
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message=msg,
+        )
+
+    if req.intent == "note_delete":
+        short_id = req.entities.get("short_id")
+        if short_id is None:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                message="Which note? Usage: /note delete #<id>",
+            )
+        phone = req.whatsapp_id
+        with engine.connect() as conn:
+            row = conn.execute(
+                select(notes).where(
+                    notes.c.shortId == int(short_id),
+                    notes.c.triggerSource == phone,
+                )
+            ).mappings().first()
+        if row is None:
+            return AlfredExecuteResponse(
+                request_id=req.request_id, status="error",
+                message=f"Note #{short_id} not found.",
+            )
+        with engine.connect() as conn:
+            conn.execute(delete(notes).where(notes.c.id == row["id"]))
+            conn.commit()
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message=f"✅ Note #{short_id} deleted.",
+        )
+
+    if req.intent == "note_link":
+        note_a = req.entities.get("note_a")
+        note_b = req.entities.get("note_b")
+        if not note_a or not note_b:
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Usage: /link #<id_A> #<id_B>")
+        if int(note_a) == int(note_b):
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Cannot link a note to itself.")
+        phone = req.whatsapp_id
+        with engine.connect() as conn:
+            row_a = conn.execute(select(notes).where(notes.c.shortId == int(note_a), notes.c.triggerSource == phone)).mappings().first()
+            row_b = conn.execute(select(notes).where(notes.c.shortId == int(note_b), notes.c.triggerSource == phone)).mappings().first()
+        if not row_a:
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message=f"Note #{note_a} not found.")
+        if not row_b:
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message=f"Note #{note_b} not found.")
+        with engine.connect() as conn:
+            existing = conn.execute(select(note_links).where(
+                ((note_links.c.note_id == row_a["id"]) & (note_links.c.linked_note_id == row_b["id"])) |
+                ((note_links.c.note_id == row_b["id"]) & (note_links.c.linked_note_id == row_a["id"]))
+            )).first()
+            if not existing:
+                conn.execute(insert(note_links).values(
+                    id=str(uuid.uuid4()),
+                    note_id=row_a["id"],
+                    linked_note_id=row_b["id"],
+                    created_by=phone,
+                    createdAt=datetime.now(timezone.utc).isoformat(),
+                ))
+                conn.commit()
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message="\U0001f517 Linked #{} and #{}.".format(note_a, note_b),
+        )
+
+    if req.intent == "note_unlink":
+        note_a = req.entities.get("note_a")
+        note_b = req.entities.get("note_b")
+        if not note_a or not note_b:
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Usage: /unlink #<id_A> #<id_B>")
+        phone = req.whatsapp_id
+        with engine.connect() as conn:
+            row_a = conn.execute(select(notes).where(notes.c.shortId == int(note_a), notes.c.triggerSource == phone)).mappings().first()
+            row_b = conn.execute(select(notes).where(notes.c.shortId == int(note_b), notes.c.triggerSource == phone)).mappings().first()
+        if not row_a or not row_b:
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="One or both notes not found.")
+        with engine.connect() as conn:
+            conn.execute(delete(note_links).where(
+                ((note_links.c.note_id == row_a["id"]) & (note_links.c.linked_note_id == row_b["id"])) |
+                ((note_links.c.note_id == row_b["id"]) & (note_links.c.linked_note_id == row_a["id"]))
+            ))
+            conn.commit()
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message="✂️ Link removed between #{} and #{}.".format(note_a, note_b),
+        )
+
+    if req.intent == "note_links":
+        short_id = req.entities.get("short_id")
+        if not short_id:
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Usage: /note links #<id>")
+        phone = req.whatsapp_id
+        with engine.connect() as conn:
+            target = conn.execute(select(notes).where(
+                notes.c.shortId == int(short_id), notes.c.triggerSource == phone
+            )).mappings().first()
+        if not target:
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Note #{} not found.".format(short_id))
+        with engine.connect() as conn:
+            lnks = conn.execute(select(note_links).where(
+                (note_links.c.note_id == target["id"]) | (note_links.c.linked_note_id == target["id"])
+            )).mappings().all()
+        linked_ids = [lnk["linked_note_id"] if lnk["note_id"] == target["id"] else lnk["note_id"] for lnk in lnks]
+        explicit_shorts: list[tuple] = []
+        if linked_ids:
+            with engine.connect() as conn:
+                exp_rows = conn.execute(select(notes).where(notes.c.id.in_(linked_ids))).mappings().all()
+            explicit_shorts = [(r.get("shortId"), r["content"][:50]) for r in exp_rows]
+        tgt_ents = target.get("entities") or {}
+        if isinstance(tgt_ents, str):
+            try:
+                tgt_ents = json.loads(tgt_ents)
+            except Exception:
+                tgt_ents = {}
+        my_ents: set = set()
+        for v in tgt_ents.values():
+            my_ents.update(v)
+        entity_shorts: list[tuple] = []
+        if my_ents:
+            with engine.connect() as conn:
+                past = conn.execute(select(notes).where(
+                    notes.c.triggerSource == phone,
+                    notes.c.id != target["id"],
+                    notes.c.status == "active",
+                )).mappings().all()
+            for r in past:
+                r_ents = r.get("entities") or {}
+                if isinstance(r_ents, str):
+                    try:
+                        r_ents = json.loads(r_ents)
+                    except Exception:
+                        r_ents = {}
+                r_all: set = set()
+                for v in r_ents.values():
+                    r_all.update(v)
+                if my_ents & r_all:
+                    entity_shorts.append((r.get("shortId"), r["content"][:50]))
+        lines: list[str] = []
+        if explicit_shorts:
+            lines.append("\U0001f517 Explicit links:")
+            for sid, snip in explicit_shorts:
+                lines.append("  #{}: {}".format(sid, snip))
+        if entity_shorts:
+            lines.append("\U0001f9e0 Entity-related:")
+            for sid, snip in entity_shorts[:5]:
+                lines.append("  #{}: {}".format(sid, snip))
+        if not lines:
+            return AlfredExecuteResponse(request_id=req.request_id, status="success", message="Note #{} has no related notes.".format(short_id))
+        return AlfredExecuteResponse(
+            request_id=req.request_id, status="success",
+            message="Note #{} connections:\n".format(short_id) + "\n".join(lines),
         )
 
     return AlfredExecuteResponse(

@@ -48,6 +48,14 @@ def _fmt_amount(amount: float, currency: str) -> str:
     return f"{sym}{amount:.2f}"
 
 
+ALFRED_API_KEY = os.environ.get("OURCENTS_API_KEY", "") or os.environ.get("ALFRED_API_KEY", "")
+
+
+def _verify_alfred_key(x_alfred_api_key: str | None = Header(default=None)) -> None:
+    if not ALFRED_API_KEY or x_alfred_api_key != ALFRED_API_KEY:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Alfred API key")
+
+
 # ─────────────────────────────────────────────────────
 # Dependency helpers
 # ─────────────────────────────────────────────────────
@@ -366,6 +374,19 @@ def delete_receipt(
         conn.commit()
 
 
+@router.delete("/alfred/admin/clear", status_code=204, dependencies=[Depends(_verify_alfred_key)])
+def admin_clear_data(db=Depends(get_db)):
+    """Clear all receipts and income entries. Preserves users, families, phone mappings, and budgets."""
+    with db.get_connection() as conn:
+        conn.execute("DELETE FROM receipt_deductions")
+        conn.execute("DELETE FROM receipt_items")
+        conn.execute("DELETE FROM upload_files")
+        conn.execute("DELETE FROM receipts")
+        conn.execute("DELETE FROM income_entries")
+        conn.commit()
+    return Response(status_code=204)
+
+
 # ─────────────────────────────────────────────────────
 # Settings — classification rules
 # ─────────────────────────────────────────────────────
@@ -490,14 +511,6 @@ def unbind_phone(
 # ASI (Alfred Service Interface) endpoints
 # ─────────────────────────────────────────────────────
 
-ALFRED_API_KEY = os.environ.get("OURCENTS_API_KEY", "") or os.environ.get("ALFRED_API_KEY", "")
-
-
-def _verify_alfred_key(x_alfred_api_key: str | None = Header(default=None)) -> None:
-    if not ALFRED_API_KEY or x_alfred_api_key != ALFRED_API_KEY:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Alfred API key")
-
-
 class AlfredExecuteRequest(BaseModel):
     request_id: str
     user_id: str
@@ -580,56 +593,71 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
         )
 
     family_id = row["family_id"]
+    user_id = row["user_id"]
     dash_svc = DashboardService(db)
 
     if req.intent == "get_balance":
         try:
-            data = dash_svc.get_period_dashboard(family_id, "month")
+            scope = (req.entities or {}).get("scope", "family")
+            period_name = (req.entities or {}).get("period", "current_month")
+
+            # Map period names to dashboard period keys
+            dash_period = "last_month" if period_name == "last_month" else "month"
+            query_user_id = user_id if scope == "personal" else None
+
+            data = dash_svc.get_period_dashboard(family_id, dash_period, user_id=query_user_id)
             expense_total = data['total_amount']
-            # Also query income for this month
-            today = date.today()
-            month_start = today.replace(day=1).isoformat()
+
+            # Income: scoped the same way
+            start_iso = data['start_date'].date().isoformat()
+            end_iso = data['end_date'].date().isoformat()
+            income_filter = "AND user_id=?" if scope == "personal" else ""
+            income_params = (family_id, start_iso, end_iso) + ((user_id,) if scope == "personal" else ())
             with db.get_connection() as conn:
                 income_row = conn.execute(
-                    "SELECT COALESCE(SUM(amount), 0) AS total FROM income_entries "
-                    "WHERE family_id=? AND income_date >= ?",
-                    (family_id, month_start),
+                    f"SELECT COALESCE(SUM(amount), 0) AS total FROM income_entries "
+                    f"WHERE family_id=? AND income_date BETWEEN ? AND ? {income_filter}",
+                    income_params,
                 ).fetchone()
             income_total = income_row["total"] if income_row else 0.0
             net = income_total - expense_total
             sign = "+" if net >= 0 else ""
+
+            period_label = "上个月" if period_name == "last_month" else "本月"
+            scope_label = "我的" if scope == "personal" else "家庭"
             msg = (
-                f"This month\n"
-                f"  Income:  ¥{income_total:.2f}\n"
-                f"  Expense: ¥{expense_total:.2f} ({data['receipt_count']} txns)\n"
-                f"  Net:     {sign}¥{net:.2f}"
+                f"{period_label}{scope_label}账单\n"
+                f"  收入:  ¥{income_total:.2f}\n"
+                f"  支出:  ¥{expense_total:.2f} ({data['receipt_count']} 笔)\n"
+                f"  结余:  {sign}¥{net:.2f}"
             )
             top = list(data.get("category_breakdown", {}).items())[:3]
             if top:
-                msg += "\nTop categories: " + ", ".join(f"{k} ¥{v:.0f}" for k, v in top)
-            # Show budget progress per category if any budgets are set
-            with db.get_connection() as conn:
-                budget_rows = conn.execute(
-                    "SELECT category, amount FROM budgets WHERE family_id=? AND period='monthly'",
-                    (family_id,),
-                ).fetchall()
-            if budget_rows:
-                cat_breakdown = data.get("category_breakdown", {})
-                budget_lines = []
-                for brow in budget_rows:
-                    cat = brow["category"]
-                    budget_amt = brow["amount"]
-                    spent = cat_breakdown.get(cat, 0.0)
-                    pct = int(spent / budget_amt * 100) if budget_amt else 0
-                    budget_lines.append(f"  {cat}: ¥{spent:.0f}/¥{budget_amt:.0f} ({pct}%)")
-                msg += "\nBudget:\n" + "\n".join(budget_lines)
+                msg += "\n分类: " + ", ".join(f"{k} ¥{v:.0f}" for k, v in top)
+            # Budget progress only for current-month family view (budgets are family-wide)
+            if scope != "personal" and period_name != "last_month":
+                with db.get_connection() as conn:
+                    budget_rows = conn.execute(
+                        "SELECT category, amount FROM budgets WHERE family_id=? AND period='monthly'",
+                        (family_id,),
+                    ).fetchall()
+                if budget_rows:
+                    cat_breakdown = data.get("category_breakdown", {})
+                    budget_lines = []
+                    for brow in budget_rows:
+                        cat = brow["category"]
+                        budget_amt = brow["amount"]
+                        spent = cat_breakdown.get(cat, 0.0)
+                        pct = int(spent / budget_amt * 100) if budget_amt else 0
+                        budget_lines.append(f"  {cat}: ¥{spent:.0f}/¥{budget_amt:.0f} ({pct}%)")
+                    msg += "\n预算:\n" + "\n".join(budget_lines)
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success", message=msg,
             )
         except Exception:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
-                error_code="SERVICE_ERROR", message="Query failed, please try again.",
+                error_code="SERVICE_ERROR", message="查询失败，请稍后重试。",
             )
 
     if req.intent == "monthly_report":

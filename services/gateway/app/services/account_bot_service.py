@@ -17,14 +17,18 @@ Called by dispatch_service before intent detection for every text message.
 Returns a reply string if the message was handled, else None.
 """
 
+import os
 import re
 from typing import Optional
+from uuid import uuid4
+from datetime import datetime, timezone
 
+import httpx
 from sqlmodel import Session
 
 import app.repositories.account_repository as repo
 
-# phone → {"action": str, "target": str}
+# phone → {"action": str, ...}
 _pending_confirmations: dict[str, dict] = {}
 
 _ADMIN_PREFIXES = (
@@ -38,6 +42,45 @@ _ADMIN_PREFIXES = (
     "/family",
     "/status",
 )
+
+_NOTE_CMD_PREFIXES = (
+    "/note get",
+    "/note list",
+    "/note delete",
+    "/note links",
+    "/find",
+    "/link",
+    "/unlink",
+)
+
+
+def _call_nudge_sync(phone: str, intent: str, entities: dict) -> str:
+    """Synchronously POST to nudge /alfred/execute and return the reply message."""
+    from app.core.config import get_settings
+    settings = get_settings()
+    nudge_key = getattr(settings, "nudge_api_key", None) or os.environ.get("NUDGE_API_KEY", "")
+    nudge_url = os.environ.get("NUDGE_URL", "http://localhost:8002/api/nudge")
+    if not nudge_key:
+        return "Note service not configured."
+    try:
+        r = httpx.post(
+            f"{nudge_url}/alfred/execute",
+            json={
+                "request_id": str(uuid4()),
+                "user_id": phone,
+                "whatsapp_id": phone,
+                "intent": intent,
+                "entities": entities,
+                "session": {},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+            headers={"X-Alfred-API-Key": nudge_key},
+            timeout=12.0,
+        )
+        r.raise_for_status()
+        return r.json().get("message", "") or "Done."
+    except Exception:
+        return "⚠️ Note service error. Please try again."
 
 
 def handle_bot_command(session: Session, phone: str, text: str) -> Optional[str]:
@@ -59,6 +102,11 @@ def handle_bot_command(session: Session, phone: str, text: str) -> Optional[str]
         return None  # unregistered — dispatch_service handles that
 
     lower = stripped.lower()
+
+    # Note commands — available to all registered users
+    if any(lower.startswith(p) for p in _NOTE_CMD_PREFIXES):
+        return _dispatch_note_command(phone, stripped)
+
     if user.role != "admin":
         if any(lower.startswith(p) for p in _ADMIN_PREFIXES):
             return "❌ Admin only."
@@ -67,7 +115,57 @@ def handle_bot_command(session: Session, phone: str, text: str) -> Optional[str]
     return _dispatch_command(session, user, stripped)
 
 
-# ── Dispatch ───────────────────────────────────────────────────────────────────
+# ── Note commands (all registered users) ──────────────────────────────────────
+
+def _dispatch_note_command(phone: str, text: str) -> Optional[str]:
+    lower = text.lower().strip()
+
+    if lower.startswith("/note get"):
+        m = re.search(r"#?(\d+)", text)
+        if not m:
+            return "Usage: /note get #<id>"
+        return _call_nudge_sync(phone, "note_get", {"short_id": int(m.group(1))})
+
+    if lower.startswith("/note list"):
+        m = re.search(r"/note\s+list\s+(\d+)", text, re.IGNORECASE)
+        limit = int(m.group(1)) if m else 5
+        return _call_nudge_sync(phone, "list_notes", {"limit": limit})
+
+    if lower.startswith("/note delete"):
+        m = re.search(r"#?(\d+)", text)
+        if not m:
+            return "Usage: /note delete #<id>"
+        short_id = int(m.group(1))
+        _pending_confirmations[phone] = {"action": "note_delete", "short_id": short_id}
+        return f"⚠️ Delete Note #{short_id}? Reply Y to confirm."
+
+    if lower.startswith("/note links"):
+        m = re.search(r"#?(\d+)", text)
+        short_id = int(m.group(1)) if m else None
+        return _call_nudge_sync(phone, "note_links", {"short_id": short_id})
+
+    if lower.startswith("/find"):
+        query = text[5:].strip()
+        if not query:
+            return "Usage: /find <search term>"
+        return _call_nudge_sync(phone, "search_notes", {"query": query})
+
+    if lower.startswith("/link"):
+        ids = re.findall(r"#?(\d+)", text)
+        if len(ids) < 2:
+            return "Usage: /link #<id_A> #<id_B>"
+        return _call_nudge_sync(phone, "note_link", {"note_a": int(ids[0]), "note_b": int(ids[1])})
+
+    if lower.startswith("/unlink"):
+        ids = re.findall(r"#?(\d+)", text)
+        if len(ids) < 2:
+            return "Usage: /unlink #<id_A> #<id_B>"
+        return _call_nudge_sync(phone, "note_unlink", {"note_a": int(ids[0]), "note_b": int(ids[1])})
+
+    return None
+
+
+# ── Admin dispatch ─────────────────────────────────────────────────────────────
 
 def _dispatch_command(session: Session, admin, text: str) -> Optional[str]:
     lower = text.lower()
@@ -98,10 +196,11 @@ def _dispatch_command(session: Session, admin, text: str) -> Optional[str]:
 
 def _handle_confirmation(session: Session, phone: str, text: str) -> str:
     pending = _pending_confirmations.pop(phone)
-    if text.strip().upper() != "YES":
-        return "Cancelled."
+    confirmed = text.strip().upper() in ("YES", "Y")
 
     if pending["action"] == "remove_user":
+        if not confirmed:
+            return "Cancelled."
         target_phone = pending["target"]
         target = repo.get_user_by_phone(session, target_phone)
         if not target:
@@ -110,6 +209,11 @@ def _handle_confirmation(session: Session, phone: str, text: str) -> str:
             return "❌ Cannot remove the last admin."
         repo.delete_user(session, target)
         return f"✅ User {target_phone} removed."
+
+    if pending["action"] == "note_delete":
+        if not confirmed:
+            return "Cancelled."
+        return _call_nudge_sync(phone, "note_delete", {"short_id": pending["short_id"]})
 
     return "Unknown action."
 

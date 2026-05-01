@@ -11,8 +11,8 @@ Modes
   --concurrent          Run all 5 phone groups IN PARALLEL (most realistic stress test)
   --scenario NAME       Run a single named scenario once, then exit
   --group GROUP         Run all scenarios in one group sequentially, then exit
-  --daemon              Run random scenarios forever; auto-ack reminder pushes between runs
-                        Stop with Ctrl-C or:  python -m src.main --stop
+  --daemon              Run each phone in its own parallel loop forever; auto-ack reminder pushes
+                        Stop with Ctrl-C or:  ./wa-sim/kill.sh
 
 Options
 -------
@@ -44,7 +44,7 @@ from pathlib import Path
 import uvicorn
 
 from . import settings, ui
-from .bridge_mock import app as bridge_app, register_session
+from .bridge_mock import app as bridge_app, register_session, init_reply_queues, get_reply_queue
 from .error_log import log_result
 from .gateway_client import check_gateway_health, send_message
 from .scenarios import (
@@ -257,52 +257,46 @@ async def run_daemon(
     interval: float,
     group: str | None,
 ) -> None:
-    """Run random scenarios forever, auto-acking reminder pushes between runs."""
-    from .bridge_mock import reply_queue
+    """Run one independent scenario loop per phone, all in parallel."""
     from . import gateway_client as _gwc
 
     scenarios = load_scenarios()
     names = _phone_names(phones)
     sid = settings.SESSION_ID
-    phone_map = {p.phone: p for p in phones}
+    active_phones = [p for p in phones if p.group == group] if group else phones
 
     loop = asyncio.get_event_loop()
     stop_event = asyncio.Event()
     loop.add_signal_handler(signal.SIGTERM, stop_event.set)
 
-    ui.log_info(f"Daemon  interval=~{interval} min (random ±50%)  group={group or 'all'}")
-    ui.log_info("Stop:  Ctrl-C  or  python -m src.main --stop\n")
+    ui.log_info(
+        f"Daemon  {len(active_phones)} phones in parallel  "
+        f"interval=~{interval} min (±50%)  group={group or 'all'}"
+    )
+    ui.log_info("Stop:  Ctrl-C  or  ./wa-sim/kill.sh\n")
 
-    total = passed = failed = 0
-
-    async def _ack_pending_pushes() -> None:
-        """Drain reply_queue and auto-ack any reminder push notifications."""
+    async def _ack_pushes(phone: VirtualPhone) -> None:
+        q = get_reply_queue(phone.phone)
         while True:
             try:
-                phone, body = reply_queue.get_nowait()
+                body = q.get_nowait()
                 if _is_reminder_push(body):
-                    ui.log_reply(phone, body)
-                    p = phone_map.get(phone)
-                    if p:
-                        ui.log_sent(phone, "ok  [auto-ack]")
-                        try:
-                            await _gwc.send_message(phone, p.name, "ok", session_id=sid)
-                        except Exception as exc:
-                            ui.log_error(f"Auto-ack failed: {exc}")
-                # Non-push replies between scenarios are stale — discard silently.
+                    ui.log_reply(phone.phone, body)
+                    ui.log_sent(phone.phone, "ok  [auto-ack]")
+                    try:
+                        await _gwc.send_message(phone.phone, phone.name, "ok", session_id=sid)
+                    except Exception as exc:
+                        ui.log_error(f"Auto-ack failed: {exc}")
             except asyncio.QueueEmpty:
                 break
 
-    async def _wait_interval() -> None:
-        """Wait a random duration around `interval` minutes, polling for pushes every 2 s."""
-        lo = max(interval * 0.5, 0.5)   # at least 30 s
-        hi = interval * 1.5
-        wait_min = random.uniform(lo, hi)
-        wait_secs = wait_min * 60
-        ui.log_info(f"Next scenario in {wait_min:.1f} min …")
-        deadline = loop.time() + wait_secs
+    async def _wait_interval(phone: VirtualPhone) -> None:
+        lo = max(interval * 0.5, 0.5)
+        wait_min = random.uniform(lo, interval * 1.5)
+        ui.log_info(f"[{phone.name}] Next in {wait_min:.1f} min …")
+        deadline = loop.time() + wait_min * 60
         while not stop_event.is_set():
-            await _ack_pending_pushes()
+            await _ack_pushes(phone)
             remaining = deadline - loop.time()
             if remaining <= 0:
                 break
@@ -311,26 +305,34 @@ async def run_daemon(
             except asyncio.TimeoutError:
                 pass
 
-    try:
+    async def phone_loop(phone: VirtualPhone) -> None:
+        phone_scenarios = [s for s in scenarios if s.get("group") == phone.group]
+        total = passed = failed = 0
         while not stop_event.is_set():
-            scenario = pick_scenario(scenarios, group=group)
-            ui.log_info(f"\n── {scenario['name']}  ({scenario['group']}) ──")
+            scenario = pick_scenario(phone_scenarios)
+            ui.log_info(f"\n── [{phone.name}] {scenario['name']} ──")
             result = await run_scenario(scenario, session_id=sid, phone_names=names)
             total += 1
             if result:
                 passed += 1
-                ui.log_success(f"PASS  {passed}/{total}")
+                ui.log_success(f"[{phone.name}] PASS  {passed}/{total}")
             else:
                 failed += 1
-                ui.log_error(f"FAIL  {passed}/{total}  ({failed} failures)")
+                ui.log_error(f"[{phone.name}] FAIL  {passed}/{total}  ({failed} failures)")
             if not stop_event.is_set():
-                await _wait_interval()
-    except asyncio.CancelledError:
-        pass
+                await _wait_interval(phone)
+
+    tasks = [asyncio.create_task(phone_loop(p), name=p.name) for p in active_phones]
+    try:
+        await asyncio.gather(*tasks)
     finally:
+        for t in tasks:
+            if not t.done():
+                t.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         loop.remove_signal_handler(signal.SIGTERM)
         _remove_pid()
-        ui.log_info(f"\nDaemon stopped — {passed}/{total} passed, {failed} failed.")
+        ui.log_info("\nDaemon stopped.")
 
 
 # ── Interactive mode ───────────────────────────────────────────────
@@ -417,6 +419,7 @@ async def _main(args: argparse.Namespace) -> None:
     phones = DEFAULT_PHONES
     ui.register_phones(phones)
 
+    init_reply_queues([p.phone for p in phones])
     _start_bridge_server()
     register_session(settings.SESSION_ID)
 

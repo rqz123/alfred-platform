@@ -19,7 +19,7 @@ import yaml
 
 from . import gateway_client, ui
 from . import error_log
-from .bridge_mock import reply_queue
+from .bridge_mock import get_reply_queue
 from . import settings
 
 REPLY_TIMEOUT = 30.0   # seconds per step
@@ -226,47 +226,21 @@ async def run_group(
 
 async def _drain_replies(phones: set[str]) -> None:
     """Discard any already-queued replies for the given phones (non-blocking)."""
-    drained: list[tuple[str, str]] = []
-    while True:
-        try:
-            item = reply_queue.get_nowait()
-            if item[0] not in phones:
-                drained.append(item)
-        except asyncio.QueueEmpty:
-            break
-    for item in drained:
-        await reply_queue.put(item)
+    for phone in phones:
+        q = get_reply_queue(phone)
+        while True:
+            try:
+                q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
 
 async def _wait_for_reply(target_phone: str, timeout: float) -> str | None:
-    """
-    Drain reply_queue until we find a message for target_phone, or timeout.
-    Non-matching messages are put back for other callers.
-    """
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-    held: list[tuple[str, str]] = []
-
+    """Wait for a reply on target_phone's dedicated queue, or return None on timeout."""
+    q = get_reply_queue(target_phone)
     try:
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                return None
-            try:
-                phone, body = await asyncio.wait_for(
-                    reply_queue.get(), timeout=min(remaining, 2.0)
-                )
-            except asyncio.TimeoutError:
-                continue
-
-            ui.log_reply(phone, body)
-
-            if phone == target_phone:
-                for item in held:
-                    await reply_queue.put(item)
-                return body
-
-            held.append((phone, body))
-    finally:
-        for item in held:
-            await reply_queue.put(item)
+        body = await asyncio.wait_for(q.get(), timeout=timeout)
+        ui.log_reply(target_phone, body)
+        return body
+    except asyncio.TimeoutError:
+        return None

@@ -33,8 +33,20 @@ app = FastAPI(title="wa-sim fake bridge")
 # In-memory session registry: session_id → {session_id, connected_phone}
 _sessions: dict[str, dict[str, str]] = {}
 
-# Queue for captured outbound messages: (recipient_phone, body)
-reply_queue: asyncio.Queue[tuple[str, str]] = asyncio.Queue()
+# Per-phone reply queues: phone → asyncio.Queue[body]
+_reply_queues: dict[str, asyncio.Queue[str]] = {}
+
+
+def get_reply_queue(phone: str) -> asyncio.Queue[str]:
+    if phone not in _reply_queues:
+        _reply_queues[phone] = asyncio.Queue()
+    return _reply_queues[phone]
+
+
+def init_reply_queues(phones: list[str]) -> None:
+    """Pre-register queues for all known phones at startup."""
+    for phone in phones:
+        _reply_queues.setdefault(phone, asyncio.Queue())
 
 
 # ── Auth helper ────────────────────────────────────────────────────
@@ -124,7 +136,7 @@ async def receive_text(
         "REPLY [%s → %s]: %s",
         session_id, body.recipient_phone, body.body[:80],
     )
-    await reply_queue.put((body.recipient_phone, body.body))
+    await get_reply_queue(body.recipient_phone).put(body.body)
     return {"provider_message_id": provider_message_id}
 
 
@@ -141,7 +153,7 @@ async def receive_media(
         "MEDIA REPLY [%s → %s]: %s (%s)",
         session_id, body.recipient_phone, body.mimetype, caption[:40],
     )
-    await reply_queue.put((body.recipient_phone, f"[media: {body.mimetype}] {caption}".strip()))
+    await get_reply_queue(body.recipient_phone).put(f"[media: {body.mimetype}] {caption}".strip())
     return {"provider_message_id": provider_message_id}
 
 

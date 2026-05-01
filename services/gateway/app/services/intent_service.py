@@ -144,6 +144,21 @@ def _extract_entities(text: str, intent: str) -> dict:
         )
         entities['content'] = m2.group(1).strip() if m2 else text
 
+    # Scope + period for balance/report queries
+    if intent in ('get_balance', 'monthly_report'):
+        # scope: personal = 我/我自己, family = 我们家/我们/家里
+        family_kw = ['我们家', '我家', '家里', '我们', 'our family', 'we ']
+        personal_kw = ['我自己', '我花', '我这月', '我上月', 'my ', 'i spend', 'i spent']
+        if any(k in text for k in family_kw):
+            entities['scope'] = 'family'
+        elif any(k in text for k in personal_kw):
+            entities['scope'] = 'personal'
+        # period: last_month = 上个月/上月, current_month = default
+        if '上个月' in text or '上月' in text or 'last month' in text:
+            entities['period'] = 'last_month'
+        else:
+            entities['period'] = 'current_month'
+
     # Search query: extract search term after trigger word
     if intent == 'search_notes':
         m2 = re.search(r'(?:\u627e|\u641c|\u67e5|search|find)\s*(.+)', text, re.IGNORECASE)
@@ -192,8 +207,10 @@ _INTENT_SCHEMA = {
                     "category": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "title":    {"anyOf": [{"type": "string"}, {"type": "null"}]},
                     "content":  {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "scope":    {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                    "period":   {"anyOf": [{"type": "string"}, {"type": "null"}]},
                 },
-                "required": ["amount", "currency", "date", "category", "title", "content"],
+                "required": ["amount", "currency", "date", "category", "title", "content", "scope", "period"],
                 "additionalProperties": False,
             },
         },
@@ -226,11 +243,13 @@ _SYSTEM_PROMPT = (
     "Only return 'none' if there is NO time and NO alarm/reminder intent at all (e.g. a random word).\n"
     "- add_expense / add_income: ONLY classify if an amount is explicitly stated "
     "(e.g. '花了50', 'spent $20'). No amount → 'none'.\n"
-    "- add_note: ONLY classify if there is actual content to save (not just the trigger word alone). "
-    "If the message starts with a clear note trigger (记一下, 笔记, note, jot, write down) and contains "
-    "content to save, classify as add_note even if a time word is incidentally present — "
-    "distinguish from add_reminder by whether the user is asking to be reminded at that time "
-    "vs. simply recording information.\n"
+    "- add_note: classify if the user wants to save a piece of information. Two sub-cases:\n"
+    "  (a) Message has a clear note trigger (记一下, 笔记, note, jot, write down) with real content to save.\n"
+    "  (b) Message is a first-person past-event statement the user is recording as a memory — "
+    "e.g. '今天和王医生复诊' / 'met the architect today about the renovation' / 'ran into John at the cafe'. "
+    "These have no explicit trigger word but are clearly personal records, not requests.\n"
+    "  Distinguish from add_reminder: reminder = user wants to be alerted at a future time. "
+    "Do NOT classify as add_note if the message is purely future/request ('remind me', 'set alarm').\n"
     "- search_notes: ONLY classify if a search topic or keyword is present.\n"
     "- cancel_reminder: ONLY classify if a specific reminder is identified (number or name).\n"
     "- Gibberish or messages with no actionable meaning → 'none'.\n\n"
@@ -253,6 +272,14 @@ _SYSTEM_PROMPT = (
     "for cancel_reminder, the reference number or name — put it in title\n"
     "- content: the full text the user wants to save for add_note intents — "
     "capture everything after the trigger word (e.g. 'Note', '记一下', '笔记') as content; "
+    "use null for all other intents\n"
+    "- scope: for get_balance / monthly_report only — "
+    "'personal' when the user refers to their own spending (我, 我自己, I, my, me); "
+    "'family' when referring to the whole household (我们家, 家里, 我们, our family, we); "
+    "use null for all other intents\n"
+    "- period: for get_balance / monthly_report only — "
+    "'last_month' when the user asks about last month (上个月, 上月, last month); "
+    "'current_month' when asking about this month (这个月, 本月, this month) or no period mentioned; "
     "use null for all other intents\n"
     "Set confidence between 0 and 1. Use null for entities that are not present."
 )

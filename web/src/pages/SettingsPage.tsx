@@ -122,17 +122,24 @@ export default function SettingsPage() {
   }
 
   async function handleReconnect() {
-    if (!alfredToken || !conn) return;
+    if (!alfredToken) return;
     setConnWorking(true);
     setConnError("");
     try {
-      await deleteConnection(alfredToken, conn.id);
+      if (conn) {
+        try {
+          await deleteConnection(alfredToken, conn.id);
+        } catch {
+          // Connection may already be gone — proceed to create a new one
+        }
+      }
       await createConnection(alfredToken, "Alfred Bot");
       await loadConn();
       stopPoll();
       pollRef.current = setInterval(loadConn, 3000);
     } catch (e: unknown) {
       setConnError(e instanceof Error ? e.message : "Failed to reconnect.");
+      await loadConn();
     } finally {
       setConnWorking(false);
     }

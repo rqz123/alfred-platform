@@ -280,3 +280,7 @@ export const alfredFamilies = {
   delete: (adminPhone: string, id: string) =>
     alfredRequest<void>(`/families/${id}`, adminPhone, { method: "DELETE" }),
 };
+
+export function clearAllData(adminPhone: string) {
+  return alfredRequest<void>("/admin/clear-all-data", adminPhone, { method: "DELETE" });
+}

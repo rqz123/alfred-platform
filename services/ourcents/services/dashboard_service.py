@@ -26,29 +26,42 @@ class DashboardService:
         self.db = database
 
     def get_period_bounds(self, period: str) -> tuple[datetime, datetime]:
-        """Return start and end datetimes for the requested current period."""
+        """Return start and end datetimes for the requested period."""
         now = _current_local_datetime()
 
         if period == 'week':
             start = datetime.combine((now - timedelta(days=now.weekday())).date(), datetime.min.time())
+            end = now
         elif period == 'month':
             start = datetime(now.year, now.month, 1)
+            end = now
+        elif period == 'last_month':
+            first_this = datetime(now.year, now.month, 1)
+            last_day = first_this - timedelta(days=1)
+            start = datetime(last_day.year, last_day.month, 1)
+            end = first_this - timedelta(seconds=1)
         elif period == 'year':
             start = datetime(now.year, 1, 1)
+            end = now
         else:
             raise ValueError(f"Unsupported period: {period}")
 
-        end = now
         return start, end
 
-    def get_period_dashboard(self, family_id: int, period: str) -> Dict:
-        """Get dashboard summary and category analysis for the selected current period."""
+    def get_period_dashboard(self, family_id: int, period: str, user_id: int | None = None) -> Dict:
+        """Get dashboard summary and category analysis for the selected period.
+
+        Pass user_id to scope results to a single family member.
+        """
         start_date, end_date = self.get_period_bounds(period)
+        user_filter = "AND user_id = ?" if user_id is not None else ""
+        base_params = (family_id, start_date.date().isoformat(), end_date.date().isoformat())
+        user_params = (user_id,) if user_id is not None else ()
 
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
 
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT COALESCE(SUM(total_amount), 0) AS total_amount,
                        COUNT(*) AS receipt_count,
                        COALESCE(AVG(total_amount), 0) AS average_amount
@@ -56,23 +69,25 @@ class DashboardService:
                 WHERE family_id = ?
                 AND DATE(purchase_date) BETWEEN ? AND ?
                   AND status = 'confirmed'
-            """, (family_id, start_date.date().isoformat(), end_date.date().isoformat()))
+                  {user_filter}
+            """, base_params + user_params)
             summary = dict(cursor.fetchone())
 
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT category,
                        COALESCE(SUM(total_amount), 0) AS total,
                        COUNT(*) AS receipt_count
                 FROM receipts
                 WHERE family_id = ?
-                                    AND DATE(purchase_date) BETWEEN ? AND ?
+                AND DATE(purchase_date) BETWEEN ? AND ?
                   AND status = 'confirmed'
+                  {user_filter}
                 GROUP BY category
                 ORDER BY total DESC
-            """, (family_id, start_date.date().isoformat(), end_date.date().isoformat()))
+            """, base_params + user_params)
             category_rows = [dict(row) for row in cursor.fetchall()]
 
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT COALESCE(SUM(rd.amount), 0) AS total
                 FROM receipt_deductions rd
                 JOIN receipts r ON r.id = rd.receipt_id
@@ -80,20 +95,22 @@ class DashboardService:
                 AND DATE(r.purchase_date) BETWEEN ? AND ?
                   AND r.status = 'confirmed'
                   AND rd.is_deductible = 1
-            """, (family_id, start_date.date().isoformat(), end_date.date().isoformat()))
+                  {user_filter.replace('user_id', 'r.user_id')}
+            """, base_params + user_params)
             deductible_total = cursor.fetchone()['total']
 
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT r.id, r.merchant_name, r.purchase_date, r.total_amount,
                        r.category, u.username
                 FROM receipts r
                 JOIN users u ON u.id = r.user_id
                 WHERE r.family_id = ?
-                                    AND DATE(r.purchase_date) BETWEEN ? AND ?
+                AND DATE(r.purchase_date) BETWEEN ? AND ?
                   AND r.status = 'confirmed'
+                  {user_filter.replace('user_id', 'r.user_id')}
                 ORDER BY r.purchase_date DESC, r.created_at DESC
                 LIMIT 10
-            """, (family_id, start_date.date().isoformat(), end_date.date().isoformat()))
+            """, base_params + user_params)
             recent_receipts = [dict(row) for row in cursor.fetchall()]
 
         category_breakdown = {row['category']: row['total'] for row in category_rows}

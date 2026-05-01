@@ -1,6 +1,6 @@
 from sqlalchemy import (
     create_engine, MetaData, Table, Column,
-    String, Text, JSON
+    String, Text, JSON, Integer
 )
 
 import os
@@ -17,12 +17,25 @@ notes = Table(
     "notes",
     metadata,
     Column("id", String, primary_key=True),
+    Column("shortId", Integer, nullable=True),    # user-scoped auto-increment, e.g. 42
+    Column("title", String, nullable=True),       # brief LLM-generated title
     Column("content", Text, nullable=False),
     Column("tags", JSON, nullable=True),
+    Column("entities", JSON, nullable=True),      # {"people": [], "places": [], "orgs": []}
     Column("triggerSource", String, nullable=True),
     Column("status", String, nullable=False, default="active"),  # active | archived
     Column("createdAt", String, nullable=False),
     Column("updatedAt", String, nullable=False),
+)
+
+note_links = Table(
+    "note_links",
+    metadata,
+    Column("id", String, primary_key=True),
+    Column("note_id", String, nullable=False),
+    Column("linked_note_id", String, nullable=False),
+    Column("created_by", String, nullable=True),   # phone
+    Column("createdAt", String, nullable=False),
 )
 
 reminders = Table(
@@ -54,6 +67,20 @@ def create_tables():
     # Migrate: add pushRetries if it doesn't exist yet
     from sqlalchemy import text
     with engine.connect() as conn:
+        try:
+            # Migrate notes table
+            note_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(notes)"))]
+            if "shortId" not in note_cols:
+                conn.execute(text('ALTER TABLE notes ADD COLUMN "shortId" INTEGER'))
+                conn.commit()
+            if "title" not in note_cols:
+                conn.execute(text('ALTER TABLE notes ADD COLUMN "title" VARCHAR'))
+                conn.commit()
+            if "entities" not in note_cols:
+                conn.execute(text('ALTER TABLE notes ADD COLUMN "entities" TEXT'))
+                conn.commit()
+        except Exception:
+            pass
         try:
             cols = [row[1] for row in conn.execute(text("PRAGMA table_info(reminders)"))]
             if "pushRetries" not in cols:

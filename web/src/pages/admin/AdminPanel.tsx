@@ -5,6 +5,8 @@ import {
   AlfredFamilyDetail,
   alfredUsers,
   alfredFamilies,
+  clearAllData,
+  login as gatewayLogin,
 } from "../../lib/api/gateway";
 
 // ── Shared styles ──────────────────────────────────────────────────────────────
@@ -59,7 +61,7 @@ const tabBtn = (active: boolean): React.CSSProperties => ({
 
 export default function AdminPanel() {
   const adminPhone = localStorage.getItem("alfred_admin_phone") ?? "";
-  const [tab, setTab] = useState<"users" | "families">("users");
+  const [tab, setTab] = useState<"users" | "families" | "danger">("users");
 
   if (!adminPhone) {
     return (
@@ -81,10 +83,12 @@ export default function AdminPanel() {
       <div style={{ display: "flex", borderBottom: "1px solid #e2e8f0", marginBottom: "1.5rem" }}>
         <button style={tabBtn(tab === "users")} onClick={() => setTab("users")}>Users</button>
         <button style={tabBtn(tab === "families")} onClick={() => setTab("families")}>Families</button>
+        <button style={{ ...tabBtn(tab === "danger"), color: tab === "danger" ? "#dc2626" : "#94a3b8" }} onClick={() => setTab("danger")}>Danger Zone</button>
       </div>
 
       {tab === "users" && <UsersTab adminPhone={adminPhone} />}
       {tab === "families" && <FamiliesTab adminPhone={adminPhone} />}
+      {tab === "danger" && <DangerZoneTab adminPhone={adminPhone} />}
     </div>
   );
 }
@@ -263,6 +267,107 @@ function UsersTab({ adminPhone }: { adminPhone: string }) {
     </>
   );
 }
+
+// ── Danger Zone Tab ───────────────────────────────────────────────────────────
+
+function DangerZoneTab({ adminPhone }: { adminPhone: string }) {
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [password, setPassword] = useState("");
+  const [clearing, setClearing] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [error, setError] = useState("");
+
+  function openConfirm() {
+    setShowConfirm(true);
+    setPassword("");
+    setMsg("");
+    setError("");
+  }
+
+  function cancel() {
+    setShowConfirm(false);
+    setPassword("");
+    setError("");
+  }
+
+  async function handleClearAll(e: React.FormEvent) {
+    e.preventDefault();
+    setClearing(true);
+    setError("");
+    try {
+      const stored = localStorage.getItem("alfred_user");
+      const username = stored ? JSON.parse(stored).username : "admin";
+      await gatewayLogin({ username, password });
+      await clearAllData(adminPhone);
+      setMsg("Done. All chat, receipts, and notes have been cleared.");
+      setShowConfirm(false);
+      setPassword("");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setClearing(false);
+    }
+  }
+
+  return (
+    <section style={{ ...sectionStyle, borderColor: "#fca5a5" }}>
+      <h3 style={{ marginTop: 0, color: "#dc2626" }}>Danger Zone</h3>
+      <p style={{ fontSize: "0.875rem", color: "#64748b", marginTop: 0 }}>
+        These actions are <strong>irreversible</strong>. User accounts, families, and settings are preserved.
+      </p>
+
+      <div style={{ display: "flex", alignItems: "center", gap: "1rem", padding: "1rem", background: "#fff5f5", border: "1px solid #fecaca", borderRadius: 6 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>Clear All Data</div>
+          <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: 2 }}>
+            Delete all chat conversations, receipts, income entries, and notes from the database.
+          </div>
+        </div>
+        {!showConfirm && (
+          <button
+            onClick={openConfirm}
+            style={{ ...dangerBtn, padding: "0.5rem 1rem", fontWeight: 600, whiteSpace: "nowrap" }}
+          >
+            Clear All Data
+          </button>
+        )}
+      </div>
+
+      {showConfirm && (
+        <form onSubmit={handleClearAll} style={{ marginTop: "1rem", padding: "1rem", background: "#fff5f5", border: "1px solid #fecaca", borderRadius: 6 }}>
+          <p style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", color: "#7f1d1d", fontWeight: 600 }}>
+            Re-enter your admin password to confirm
+          </p>
+          <div style={{ display: "flex", gap: "0.6rem", alignItems: "center" }}>
+            <input
+              type="password"
+              autoFocus
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              style={{ ...inputStyle, flex: 1 }}
+              required
+            />
+            <button
+              type="submit"
+              disabled={clearing || !password}
+              style={{ ...dangerBtn, padding: "0.4rem 0.9rem", fontWeight: 600 }}
+            >
+              {clearing ? "Clearing…" : "Confirm"}
+            </button>
+            <button type="button" onClick={cancel} style={{ ...btnStyle, background: "#64748b" }}>
+              Cancel
+            </button>
+          </div>
+          {error && <p style={{ color: "#dc2626", fontSize: "0.8rem", marginTop: "0.5rem", marginBottom: 0 }}>{error}</p>}
+        </form>
+      )}
+
+      {msg && <p style={{ color: "#16a34a", fontSize: "0.875rem", marginTop: "0.75rem", marginBottom: 0 }}>{msg}</p>}
+    </section>
+  );
+}
+
 
 // ── Families Tab ──────────────────────────────────────────────────────────────
 
