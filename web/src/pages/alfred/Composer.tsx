@@ -58,15 +58,6 @@ export function Composer({ disabled, onSend, onSendImage, onClear }: ComposerPro
         onChange={(event) => setBody(event.target.value)}
         disabled={disabled || sending}
       />
-      <label className="voice-toggle">
-        <input
-          type="checkbox"
-          checked={sendAsVoice}
-          onChange={(event) => setSendAsVoice(event.target.checked)}
-          disabled={disabled || sending}
-        />
-        <span>Send as voice</span>
-      </label>
       <div className="composer-actions">
         <input
           ref={fileInputRef}
@@ -75,6 +66,15 @@ export function Composer({ disabled, onSend, onSendImage, onClear }: ComposerPro
           style={{ display: "none" }}
           onChange={handleImageChange}
         />
+        <button
+          type="button"
+          className={`secondary-button image-btn${sendAsVoice ? " voice-active" : ""}`}
+          title="Send as voice"
+          onClick={() => setSendAsVoice((v) => !v)}
+          disabled={disabled || sending}
+        >
+          🎤
+        </button>
         <button
           type="button"
           className="secondary-button image-btn"

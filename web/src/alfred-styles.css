@@ -474,18 +474,6 @@ button {
   gap: 10px;
 }
 
-.voice-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: #475467;
-  white-space: nowrap;
-}
-
-.voice-toggle input {
-  margin: 0;
-}
-
 .secondary-button {
   background: #e2e8f0 !important;
   color: #0f172a !important;
@@ -495,6 +483,12 @@ button {
   padding: 10px 12px !important;
   font-size: 1rem;
   line-height: 1;
+}
+
+.voice-active {
+  background: #dbeafe !important;
+  color: #1d4ed8 !important;
+  outline: 2px solid #93c5fd;
 }
 
 .error-banner,
