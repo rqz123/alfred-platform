@@ -284,3 +284,7 @@ export const alfredFamilies = {
 export function clearAllData(adminPhone: string) {
   return alfredRequest<void>("/admin/clear-all-data", adminPhone, { method: "DELETE" });
 }
+
+export function clearAllLogs(adminPhone: string) {
+  return alfredRequest<void>("/admin/clear-logs", adminPhone, { method: "DELETE" });
+}

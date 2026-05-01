@@ -6,6 +6,7 @@ import {
   alfredUsers,
   alfredFamilies,
   clearAllData,
+  clearAllLogs,
   login as gatewayLogin,
 } from "../../lib/api/gateway";
 
@@ -271,26 +272,26 @@ function UsersTab({ adminPhone }: { adminPhone: string }) {
 // ── Danger Zone Tab ───────────────────────────────────────────────────────────
 
 function DangerZoneTab({ adminPhone }: { adminPhone: string }) {
-  const [showConfirm, setShowConfirm] = useState(false);
+  const [confirmAction, setConfirmAction] = useState<"data" | "logs" | null>(null);
   const [password, setPassword] = useState("");
   const [clearing, setClearing] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
 
-  function openConfirm() {
-    setShowConfirm(true);
+  function openConfirm(action: "data" | "logs") {
+    setConfirmAction(action);
     setPassword("");
     setMsg("");
     setError("");
   }
 
   function cancel() {
-    setShowConfirm(false);
+    setConfirmAction(null);
     setPassword("");
     setError("");
   }
 
-  async function handleClearAll(e: React.FormEvent) {
+  async function handleConfirm(e: React.FormEvent) {
     e.preventDefault();
     setClearing(true);
     setError("");
@@ -298,9 +299,14 @@ function DangerZoneTab({ adminPhone }: { adminPhone: string }) {
       const stored = localStorage.getItem("alfred_user");
       const username = stored ? JSON.parse(stored).username : "admin";
       await gatewayLogin({ username, password });
-      await clearAllData(adminPhone);
-      setMsg("Done. All chat, receipts, and notes have been cleared.");
-      setShowConfirm(false);
+      if (confirmAction === "logs") {
+        await clearAllLogs(adminPhone);
+        setMsg("Done. All chat logs have been cleared.");
+      } else {
+        await clearAllData(adminPhone);
+        setMsg("Done. All chat, receipts, and notes have been cleared.");
+      }
+      setConfirmAction(null);
       setPassword("");
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed");
@@ -309,6 +315,19 @@ function DangerZoneTab({ adminPhone }: { adminPhone: string }) {
     }
   }
 
+  const actions: { key: "logs" | "data"; label: string; desc: string }[] = [
+    {
+      key: "logs",
+      label: "Clear All Logs",
+      desc: "Delete all chat conversations and messages. Receipts, notes, and user accounts are preserved.",
+    },
+    {
+      key: "data",
+      label: "Clear All Data",
+      desc: "Delete all chat conversations, receipts, income entries, and notes from the database.",
+    },
+  ];
+
   return (
     <section style={{ ...sectionStyle, borderColor: "#fca5a5" }}>
       <h3 style={{ marginTop: 0, color: "#dc2626" }}>Danger Zone</h3>
@@ -316,25 +335,27 @@ function DangerZoneTab({ adminPhone }: { adminPhone: string }) {
         These actions are <strong>irreversible</strong>. User accounts, families, and settings are preserved.
       </p>
 
-      <div style={{ display: "flex", alignItems: "center", gap: "1rem", padding: "1rem", background: "#fff5f5", border: "1px solid #fecaca", borderRadius: 6 }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>Clear All Data</div>
-          <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: 2 }}>
-            Delete all chat conversations, receipts, income entries, and notes from the database.
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {actions.map((a) => (
+          <div key={a.key} style={{ display: "flex", alignItems: "center", gap: "1rem", padding: "1rem", background: "#fff5f5", border: "1px solid #fecaca", borderRadius: 6 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontWeight: 600, fontSize: "0.9rem" }}>{a.label}</div>
+              <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: 2 }}>{a.desc}</div>
+            </div>
+            {confirmAction == null && (
+              <button
+                onClick={() => openConfirm(a.key)}
+                style={{ ...dangerBtn, padding: "0.5rem 1rem", fontWeight: 600, whiteSpace: "nowrap" }}
+              >
+                {a.label}
+              </button>
+            )}
           </div>
-        </div>
-        {!showConfirm && (
-          <button
-            onClick={openConfirm}
-            style={{ ...dangerBtn, padding: "0.5rem 1rem", fontWeight: 600, whiteSpace: "nowrap" }}
-          >
-            Clear All Data
-          </button>
-        )}
+        ))}
       </div>
 
-      {showConfirm && (
-        <form onSubmit={handleClearAll} style={{ marginTop: "1rem", padding: "1rem", background: "#fff5f5", border: "1px solid #fecaca", borderRadius: 6 }}>
+      {confirmAction != null && (
+        <form onSubmit={handleConfirm} style={{ marginTop: "1rem", padding: "1rem", background: "#fff5f5", border: "1px solid #fecaca", borderRadius: 6 }}>
           <p style={{ margin: "0 0 0.75rem", fontSize: "0.875rem", color: "#7f1d1d", fontWeight: 600 }}>
             Re-enter your admin password to confirm
           </p>

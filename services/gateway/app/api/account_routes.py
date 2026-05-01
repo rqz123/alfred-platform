@@ -321,6 +321,17 @@ def clear_all_data(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
+@alfred_router.delete("/admin/clear-logs", status_code=status.HTTP_204_NO_CONTENT)
+def clear_logs(
+    admin: AlfredUser = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> Response:
+    """Clear all chat conversations and messages only. Preserves receipts, notes, and user records."""
+    from app.repositories.chat_repository import delete_all_conversations
+    delete_all_conversations(session)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 def _clear_service(registry, intent: str, path: str) -> None:
     svc = registry.find_service(intent)
     if not svc:
