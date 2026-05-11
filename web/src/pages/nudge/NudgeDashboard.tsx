@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { listReminders, listNotes, deleteReminder } from "../../lib/api/nudge";
+import { listReminders, listThreads, deleteReminder } from "../../lib/api/nudge";
 import { listPhoneBindings } from "../../lib/api/ourcents";
 import { ReminderSection } from "./ReminderList";
-import { NoteList } from "./NoteList";
-import type { Reminder, Note } from "../../lib/types/nudge";
+import { ThreadList } from "./ThreadList";
+import { TodayTriggers } from "./TodayTriggers";
+import type { Reminder, Thread } from "../../lib/types/nudge";
 
 type Period = "7d" | "30d" | "all";
 
@@ -17,13 +18,13 @@ function withinPeriod(iso: string | null | undefined, period: Period): boolean {
 
 
 
-type Tab = "reminders" | "notes";
+type Tab = "today" | "reminders" | "threads";
 
 export default function NudgeDashboard() {
-  const [tab, setTab] = useState<Tab>("reminders");
+  const [tab, setTab] = useState<Tab>("today");
   const [period, setPeriod] = useState<Period>("7d");
   const [reminders, setReminders] = useState<Reminder[]>([]);
-  const [notes, setNotes] = useState<Note[]>([]);
+  const [threads, setThreads] = useState<Thread[]>([]);
   const [loading, setLoading] = useState(true);
   const [hasPhone, setHasPhone] = useState<boolean | null>(null);
   const navigate = useNavigate();
@@ -32,13 +33,13 @@ export default function NudgeDashboard() {
     listReminders().then(setReminders).catch(() => {});
   }
 
-  function loadNotes() {
-    listNotes().then(setNotes).catch(() => {});
+  function loadThreads() {
+    listThreads().then(setThreads).catch(() => {});
   }
 
   useEffect(() => {
-    Promise.all([listReminders(), listNotes()])
-      .then(([r, n]) => { setReminders(r); setNotes(n); })
+    Promise.all([listReminders(), listThreads()])
+      .then(([r, n]) => { setReminders(r); setThreads(n); })
       .catch(() => {})
       .finally(() => setLoading(false));
     listPhoneBindings()
@@ -69,19 +70,33 @@ export default function NudgeDashboard() {
     loadReminders();
   }
 
-  const activeNotes = notes.filter((n) => n.status === "active");
+  const activeThreads = threads.filter((n) => n.status === "active");
+
+  // Today's triggers: threads with fire_at in the next 24h (or up to 1h past)
+  const now = Date.now();
+  const cutoff = now + 24 * 60 * 60 * 1000;
+  const todayTriggers = threads.filter((t) => {
+    const fireAt = t.trigger?.fire_at;
+    if (!fireAt || t.trigger?.type === "none") return false;
+    const ts = new Date(fireAt).getTime();
+    return ts >= now - 60 * 60 * 1000 && ts <= cutoff;
+  }).sort((a, b) => {
+    const at = a.trigger?.fire_at ? new Date(a.trigger.fire_at).getTime() : 0;
+    const bt = b.trigger?.fire_at ? new Date(b.trigger.fire_at).getTime() : 0;
+    return at - bt;
+  });
 
   return (
     <div style={{ padding: "1.5rem" }}>
       <div style={{ maxWidth: 700 }}>
         <div style={{ marginBottom: "1.25rem" }}>
           <h2 style={{ margin: 0 }}>Nudge</h2>
-          <p style={{ margin: "4px 0 0", color: "#6b7280", fontSize: 14 }}>Reminders & notes</p>
+          <p style={{ margin: "4px 0 0", color: "#6b7280", fontSize: 14 }}>Reminders & threads</p>
         </div>
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 4, marginBottom: "1.5rem", borderBottom: "1px solid #e5e7eb", paddingBottom: 0 }}>
-          {(["reminders", "notes"] as Tab[]).map((t) => (
+          {(["today", "reminders", "threads"] as Tab[]).map((t) => (
             <button
               key={t}
               onClick={() => setTab(t)}
@@ -99,9 +114,11 @@ export default function NudgeDashboard() {
                 textTransform: "capitalize",
               }}
             >
-              {t === "reminders"
+              {t === "today"
+                ? `Today${todayTriggers.length ? ` (${todayTriggers.length})` : ""}`
+                : t === "reminders"
                 ? `Reminders${activeReminders.length ? ` (${activeReminders.length})` : ""}`
-                : `Notes${activeNotes.length ? ` (${activeNotes.length})` : ""}`}
+                : `Threads${activeThreads.length ? ` (${activeThreads.length})` : ""}`}
             </button>
           ))}
         </div>
@@ -124,6 +141,8 @@ export default function NudgeDashboard() {
 
         {loading ? (
           <p style={{ color: "#9ca3af", fontSize: 14 }}>Loading…</p>
+        ) : tab === "today" ? (
+          <TodayTriggers threads={todayTriggers} onRefresh={loadThreads} />
         ) : tab === "reminders" ? (
           <>
             <ReminderSection
@@ -178,7 +197,7 @@ export default function NudgeDashboard() {
             />
           </>
         ) : (
-          <NoteList notes={activeNotes} onRefresh={loadNotes} />
+          <ThreadList threads={activeThreads} onRefresh={loadThreads} />
         )}
       </div>
     </div>

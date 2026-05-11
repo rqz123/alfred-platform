@@ -27,9 +27,18 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 echo "      done."
 
-# ── Nudge ─────────────────────────────────────────────────────────────────────
-echo "[3/4] Nudge..."
-cd "$REPO/services/nudge"
+# ── Thread ────────────────────────────────────────────────────────────────────
+echo "[3/4] Thread..."
+cd "$REPO/services/thread"
+rm -rf .venv
+python3 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt
+echo "      done."
+
+# ── Brain ─────────────────────────────────────────────────────────────────────
+echo "[4/5] Brain..."
+cd "$REPO/services/brain"
 rm -rf .venv
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
@@ -37,7 +46,7 @@ python3 -m venv .venv
 echo "      done."
 
 # ── Bridge (Node.js) ──────────────────────────────────────────────────────────
-echo "[4/4] Bridge (npm install)..."
+echo "[5/5] Bridge (npm install)..."
 cd "$REPO/bridge"
 npm install
 echo "      done."

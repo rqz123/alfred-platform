@@ -37,22 +37,46 @@ export interface ParseResponse {
   nextFireAt?: string | null;
 }
 
-export interface NoteEntities {
+export interface ThreadEntities {
   people: string[];
   places: string[];
   orgs: string[];
 }
 
-export interface Note {
+export type TriggerType = "none" | "once" | "recurring" | "geofence";
+export type AckStatus =
+  | "pending"
+  | "firing"
+  | "awaiting"
+  | "acknowledged"
+  | "snoozed"
+  | "dismissed"
+  | "expired";
+
+export interface Trigger {
+  type: TriggerType;
+  fire_at?: string | null;
+  cron?: string | null;
+  location?: string | null;
+  ack_status: AckStatus;
+  ack_timeout_at?: string | null;
+}
+
+export interface Thread {
   id: string;
   shortId?: number | null;
   title?: string | null;
   content: string;
+  category?: "pro" | "life" | "emo" | "routine" | null;
   tags?: string[] | null;
-  entities?: NoteEntities | null;
+  entities?: ThreadEntities | null;
   relatedIds?: number[] | null;
   triggerSource?: string | null;
-  status: "active" | "archived";
+  trigger?: Trigger | null;
+  snoozeCount?: number | null;
+  source?: string | null;
+  priority?: "high" | "normal" | "low" | null;
+  status: "active" | "sleeping" | "archived";
   createdAt: string;
   updatedAt: string;
 }

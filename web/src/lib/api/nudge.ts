@@ -1,6 +1,6 @@
-import type { ParseResponse, Reminder, ReminderCreate, Note } from "../types/nudge";
+import type { ParseResponse, Reminder, ReminderCreate, Thread } from "../types/nudge";
 
-const NUDGE_BASE = `${window.location.protocol}//${window.location.hostname}:8002`;
+const THREAD_BASE = `${window.location.protocol}//${window.location.hostname}:8002`;
 
 function getAuthHeaders(): Record<string, string> {
   const token = localStorage.getItem("alfred_token");
@@ -15,7 +15,7 @@ function clearSessionAndRedirect() {
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${NUDGE_BASE}${path}`, {
+  const res = await fetch(`${THREAD_BASE}${path}`, {
     headers: { "Content-Type": "application/json", ...getAuthHeaders() },
     ...options,
   });
@@ -35,45 +35,70 @@ export function parseReminder(
   input: string,
   timezone: string
 ): Promise<ParseResponse> {
-  return request<ParseResponse>("/api/nudge/parse", {
+  return request<ParseResponse>("/api/thread/parse", {
     method: "POST",
     body: JSON.stringify({ input, timezone }),
   });
 }
 
 export function saveReminder(data: ReminderCreate): Promise<Reminder> {
-  return request<Reminder>("/api/nudge/reminders", {
+  return request<Reminder>("/api/thread/reminders", {
     method: "POST",
     body: JSON.stringify(data),
   });
 }
 
 export function listReminders(): Promise<Reminder[]> {
-  return request<Reminder[]>("/api/nudge/reminders");
+  return request<Reminder[]>("/api/thread/reminders");
 }
 
 export function patchReminder(id: string, status: "active" | "paused" | "done"): Promise<Reminder> {
-  return request<Reminder>(`/api/nudge/reminders/${id}`, {
+  return request<Reminder>(`/api/thread/reminders/${id}`, {
     method: "PATCH",
     body: JSON.stringify({ status }),
   });
 }
 
 export function deleteReminder(id: string): Promise<void> {
-  return request<void>(`/api/nudge/reminders/${id}`, { method: "DELETE" });
+  return request<void>(`/api/thread/reminders/${id}`, { method: "DELETE" });
 }
 
-export function listNotes(): Promise<Note[]> {
-  return request<Note[]>("/api/nudge/notes");
+export function listThreads(): Promise<Thread[]> {
+  return request<Thread[]>("/api/thread/threads");
 }
 
-export function createNote(content: string, tags?: string[]): Promise<Note> {
-  return request<Note>("/api/nudge/notes", {
+export function createThread(content: string, tags?: string[]): Promise<Thread> {
+  return request<Thread>("/api/thread/threads", {
     method: "POST",
     body: JSON.stringify({ content, tags }),
   });
 }
 
-export function deleteNote(id: string): Promise<void> {
-  return request<void>(`/api/nudge/notes/${id}`, { method: "DELETE" });
+export function deleteThread(id: string): Promise<void> {
+  return request<void>(`/api/thread/threads/${id}`, { method: "DELETE" });
+}
+
+export function snoozeThread(id: string, minutes = 30): Promise<{ ok: boolean; fire_at: string }> {
+  return request(`/api/thread/threads/${id}/snooze`, {
+    method: "POST",
+    body: JSON.stringify({ minutes }),
+  });
+}
+
+export function dismissThread(id: string): Promise<{ ok: boolean }> {
+  return request(`/api/thread/threads/${id}/dismiss`, { method: "POST" });
+}
+
+/** Fetch threads whose trigger fires within the next 24 hours. */
+export function listTodayTriggers(): Promise<Thread[]> {
+  return listThreads().then((threads) => {
+    const now = Date.now();
+    const cutoff = now + 24 * 60 * 60 * 1000;
+    return threads.filter((t) => {
+      const fireAt = t.trigger?.fire_at;
+      if (!fireAt) return false;
+      const ts = new Date(fireAt).getTime();
+      return ts >= now - 60 * 60 * 1000 && ts <= cutoff; // include up to 1h past
+    });
+  });
 }

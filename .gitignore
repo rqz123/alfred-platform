@@ -15,3 +15,6 @@
 data/
 .pids
 .logs/
+wa-sim/output/
+wa-sim/*.db
+wa-sim/*.pid

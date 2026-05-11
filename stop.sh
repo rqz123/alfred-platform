@@ -2,14 +2,14 @@
 
 REPO="$(cd "$(dirname "$0")" && pwd)"
 PID_FILE="$REPO/.pids"
-PORTS="8000,8001,8002,3001"
+PORTS="8000,8001,8002,8003,3001"
 
 echo "Stopping Alfred Platform..."
 echo ""
 
 # Step 1: Kill processes recorded in .pids
 if [ -f "$PID_FILE" ]; then
-  NAMES=("bridge" "gateway" "ourcents" "nudge" "frontend")
+  NAMES=("bridge" "gateway" "ourcents" "thread" "brain" "frontend")
   i=0
   while IFS= read -r pid; do
     name="${NAMES[$i]:-unknown}"

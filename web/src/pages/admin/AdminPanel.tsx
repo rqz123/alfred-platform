@@ -304,7 +304,7 @@ function DangerZoneTab({ adminPhone }: { adminPhone: string }) {
         setMsg("Done. All chat logs have been cleared.");
       } else {
         await clearAllData(adminPhone);
-        setMsg("Done. All chat, receipts, and notes have been cleared.");
+        setMsg("Done. All chat, receipts, and threads have been cleared.");
       }
       setConfirmAction(null);
       setPassword("");
@@ -319,12 +319,12 @@ function DangerZoneTab({ adminPhone }: { adminPhone: string }) {
     {
       key: "logs",
       label: "Clear All Logs",
-      desc: "Delete all chat conversations and messages. Receipts, notes, and user accounts are preserved.",
+      desc: "Delete all chat conversations and messages. Receipts, threads, and user accounts are preserved.",
     },
     {
       key: "data",
       label: "Clear All Data",
-      desc: "Delete all chat conversations, receipts, income entries, and notes from the database.",
+      desc: "Delete all chat conversations, receipts, income entries, and threads from the database.",
     },
   ];
 

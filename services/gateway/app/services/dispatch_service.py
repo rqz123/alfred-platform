@@ -15,6 +15,8 @@ Multi-turn follow-up flow:
 """
 
 import logging
+import re
+import threading
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -40,6 +42,25 @@ logger = logging.getLogger('alfred.dispatch')
 
 # Module-level singleton — loaded once at startup
 _registry = ServiceRegistry()
+
+
+def _broadcast_to_brain(event: dict) -> None:
+    """Fire-and-forget POST to Brain's /brain/events. Never raises, never blocks."""
+    def _post():
+        settings = get_settings()
+        if not settings.brain_url or not settings.brain_api_key:
+            return
+        try:
+            httpx.post(
+                f"{settings.brain_url}/api/brain/events",
+                json=event,
+                headers={"X-API-Key": settings.brain_api_key},
+                timeout=2.0,
+            )
+        except Exception as exc:
+            logger.debug("Brain broadcast failed (non-fatal): %s", exc)
+
+    threading.Thread(target=_post, daemon=True).start()
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -101,15 +122,22 @@ def dispatch_message(session: Session, msg: MessageRead) -> None:
 
     # ── Follow-up message (pending session exists) ─────────────────
     if pending:
-        result = detect_intent(text)
+        # Bare amount/number responses (e.g. "500元", "$15") always complete
+        # the pending session — never treat them as a new intent.
+        if _is_likely_entity_only(text):
+            result = None
+        else:
+            result = detect_intent(text)
 
-        if result is not None:
-            # User switched to a new intent — abandon the old pending
+        if result is not None and result['intent'] != pending.intent:
+            # User switched to a DIFFERENT intent — abandon the old pending
             logger.debug('New intent %s while pending %s for %s; dropping old pending',
                          result['intent'], pending.intent, phone)
             clear_pending(phone)
             _handle_fresh(session, conv, phone, msg, result, settings)
         else:
+            # Same intent re-detected (e.g. "tomorrow at noon" for pending add_reminder)
+            # or no intent — treat follow-up text as additional entities for the pending session.
             _handle_followup(session, conv, phone, msg, pending, text, settings)
         return
 
@@ -188,6 +216,9 @@ def _handle_image(
                "Receipt processing failed. Please try again.", settings)
         return
 
+    if resp.get('status') == 'success':
+        _broadcast_create_event(session, phone, 'process_receipt_image', entities, resp)
+
     _reply_from_resp(session, conv, phone, resp, settings)
 
 
@@ -201,7 +232,16 @@ def _handle_fresh(
 ) -> None:
     """Route a freshly-detected intent to the appropriate service."""
     intent: str = result['intent']
-    entities: dict = result['entities']
+    entities: dict = dict(result['entities'])
+
+    # For add_reminder, the Thread service's parse_reminder handles full natural language
+    # far better than the Gateway's intent extractor. Always pass the original message text
+    # as the title so parse_reminder sees "明天下午2点提醒我开会" intact, not just "开会".
+    # Pending sessions then carry this full text so multi-turn merges never lose it.
+    if intent == 'add_reminder':
+        original = (msg.transcript or msg.body or '').strip()
+        if original:
+            entities['title'] = original
 
     service = _registry.find_service(intent)
     if service is None:
@@ -217,8 +257,63 @@ def _handle_fresh(
 
     if resp.get('error_code') == 'INSUFFICIENT_DATA':
         save_pending(phone, intent, entities, service)
+    elif resp.get('status') == 'success':
+        _broadcast_create_event(session, phone, intent, entities, resp)
 
     _reply_from_resp(session, conv, phone, resp, settings)
+
+
+def _broadcast_create_event(
+    session: Session,
+    phone: str,
+    intent: str,
+    entities: dict,
+    resp: dict,
+) -> None:
+    """Assemble and fire a CREATE event to Brain after a successful skill execution."""
+    from app.repositories.account_repository import get_user_by_phone
+
+    user = get_user_by_phone(session, phone)
+    family_id = user.family_id if user and user.family_id else None
+
+    resp_data = resp.get('data') or {}
+
+    if intent == 'process_receipt_image':
+        enriched_entities = {
+            'filename': entities.get('filename'),
+            'caption': entities.get('caption'),
+        }
+    else:
+        enriched_entities = {**entities}
+
+    for key in (
+        'intent_vector',
+        'thread_id',
+        'expense_id',
+        'merchant_name',
+        'amount',
+        'category',
+        'currency',
+        'trigger',
+    ):
+        if resp_data.get(key) is not None:
+            enriched_entities[key] = resp_data[key]
+
+    event = {
+        'event_action': 'CREATE',
+        'event_type': intent,
+        'entities': enriched_entities,
+        'user_id': phone,
+        'family_id': family_id,
+        'timestamp': datetime.now(timezone.utc).isoformat(),
+    }
+    _broadcast_to_brain(event)
+
+
+def _is_likely_entity_only(text: str) -> bool:
+    """Return True when the text looks like a bare entity (amount, date) with no new intent."""
+    t = text.strip()
+    return bool(re.match(r'^[\$¥€£＄]?\s*\d+(?:\.\d{1,2})?\s*[元块钱万]?$', t))
 
 
 def _handle_followup(
@@ -232,6 +327,10 @@ def _handle_followup(
 ) -> None:
     """Merge new entities from the follow-up message and retry the service."""
     new_entities = extract_entities(text, pending.intent)
+    # For add_reminder: preserve the raw follow-up text so the time parser sees
+    # the full phrase (e.g. "tomorrow at noon"), not just the extracted date word.
+    if pending.intent == "add_reminder" and "title" not in new_entities:
+        new_entities["time_hint"] = text.strip()
     merged = {**pending.entities, **new_entities}
 
     pending.retries += 1
@@ -255,6 +354,8 @@ def _handle_followup(
         pending.entities = merged
     else:
         clear_pending(phone)
+        if resp.get('status') == 'success':
+            _broadcast_create_event(session, phone, pending.intent, merged, resp)
 
     _reply_from_resp(session, conv, phone, resp, settings)
 

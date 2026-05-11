@@ -18,11 +18,11 @@ from pydantic import BaseModel
 from sqlalchemy import select, insert, update, delete, func
 
 from shared.auth import make_verify_token, TokenPayload
-from database import engine, reminders, notes, note_links
+from database import engine, reminders, threads, thread_links
 from models import (
     ParseRequest, ParseResponse, ParsedReminder,
     ReminderCreate, ReminderOut, ReminderUpdate,
-    NoteCreate, NoteOut, NoteUpdate,
+    ThreadCreate, ThreadOut, ThreadUpdate,
 )
 from services.parser import parse_reminder, compute_next_fire
 
@@ -149,20 +149,20 @@ async def delete_reminder(
 
 
 # ─────────────────────────────────────────────────────
-# Note REST endpoints
+# Thread REST endpoints
 # ─────────────────────────────────────────────────────
 
-def _build_note_out(row, all_rows: list, all_links: list) -> NoteOut:
-    """Build NoteOut with shortId, title, entities, and computed relatedIds."""
-    note_id = row["id"]
+def _build_thread_out(row, all_rows: list, all_links: list) -> ThreadOut:
+    """Build ThreadOut with shortId, title, entities, and computed relatedIds."""
+    thread_id = row["id"]
     phone = row.get("triggerSource")
 
     explicit_ids: set[str] = set()
     for lnk in all_links:
-        if lnk["note_id"] == note_id:
-            explicit_ids.add(lnk["linked_note_id"])
-        elif lnk["linked_note_id"] == note_id:
-            explicit_ids.add(lnk["note_id"])
+        if lnk["thread_id"] == thread_id:
+            explicit_ids.add(lnk["linked_thread_id"])
+        elif lnk["linked_thread_id"] == thread_id:
+            explicit_ids.add(lnk["thread_id"])
 
     ents = row.get("entities") or {}
     if isinstance(ents, str):
@@ -178,7 +178,7 @@ def _build_note_out(row, all_rows: list, all_links: list) -> NoteOut:
     entity_related_ids: set[str] = set()
     if my_ents and phone:
         for r in all_rows:
-            if r["id"] == note_id or r.get("triggerSource") != phone:
+            if r["id"] == thread_id or r.get("triggerSource") != phone:
                 continue
             r_ents = r.get("entities") or {}
             if isinstance(r_ents, str):
@@ -198,8 +198,8 @@ def _build_note_out(row, all_rows: list, all_links: list) -> NoteOut:
         [sid for nid in all_related if (sid := id_to_short.get(nid)) is not None]
     )
 
-    return NoteOut(
-        id=note_id,
+    return ThreadOut(
+        id=thread_id,
         shortId=row.get("shortId"),
         title=row.get("title"),
         content=row["content"],
@@ -213,20 +213,20 @@ def _build_note_out(row, all_rows: list, all_links: list) -> NoteOut:
     )
 
 
-@router.post("/notes", response_model=NoteOut)
-async def create_note(data: NoteCreate, _: TokenPayload = Depends(verify_token)):
+@router.post("/threads", response_model=ThreadOut)
+async def create_thread(data: ThreadCreate, _: TokenPayload = Depends(verify_token)):
     now = datetime.now(timezone.utc).isoformat()
-    note_id = str(uuid.uuid4())
+    thread_id = str(uuid.uuid4())
     phone = data.triggerSource
     next_short_id: Optional[int] = None
     if phone:
         with engine.connect() as conn:
             max_sid = conn.execute(
-                select(func.max(notes.c.shortId)).where(notes.c.triggerSource == phone)
+                select(func.max(threads.c.shortId)).where(threads.c.triggerSource == phone)
             ).scalar()
         next_short_id = (max_sid or 0) + 1
     row = {
-        "id": note_id,
+        "id": thread_id,
         "shortId": next_short_id,
         "title": None,
         "content": data.content,
@@ -238,35 +238,35 @@ async def create_note(data: NoteCreate, _: TokenPayload = Depends(verify_token))
         "updatedAt": now,
     }
     with engine.connect() as conn:
-        conn.execute(insert(notes).values(**row))
+        conn.execute(insert(threads).values(**row))
         conn.commit()
-    return NoteOut(**row)
+    return ThreadOut(**row)
 
 
-@router.get("/notes", response_model=list[NoteOut])
-async def list_notes_endpoint(
+@router.get("/threads", response_model=list[ThreadOut])
+async def list_threads_endpoint(
     status: Optional[str] = None,
     _: TokenPayload = Depends(verify_token),
 ):
     with engine.connect() as conn:
-        all_rows = conn.execute(select(notes).order_by(notes.c.createdAt.desc())).mappings().all()
-        all_lnks = conn.execute(select(note_links)).mappings().all()
-    result = [_build_note_out(r, all_rows, all_lnks) for r in all_rows]
+        all_rows = conn.execute(select(threads).order_by(threads.c.createdAt.desc())).mappings().all()
+        all_lnks = conn.execute(select(thread_links)).mappings().all()
+    result = [_build_thread_out(r, all_rows, all_lnks) for r in all_rows]
     if status:
         result = [n for n in result if n.status == status]
     return result
 
 
-@router.delete("/notes/{note_id}", status_code=204)
-async def delete_note(
-    note_id: str,
+@router.delete("/threads/{thread_id}", status_code=204)
+async def delete_thread(
+    thread_id: str,
     _: TokenPayload = Depends(verify_token),
 ):
     with engine.connect() as conn:
-        row = conn.execute(select(notes).where(notes.c.id == note_id)).mappings().first()
+        row = conn.execute(select(threads).where(threads.c.id == thread_id)).mappings().first()
         if row is None:
-            raise HTTPException(status_code=404, detail="Note not found")
-        conn.execute(delete(notes).where(notes.c.id == note_id))
+            raise HTTPException(status_code=404, detail="Thread not found")
+        conn.execute(delete(threads).where(threads.c.id == thread_id))
         conn.commit()
 
 
@@ -323,10 +323,10 @@ def _verify_alfred_key(x_alfred_api_key: str | None = Header(default=None)) -> N
 
 
 @router.delete("/alfred/admin/clear", status_code=204, dependencies=[Depends(_verify_alfred_key)])
-async def admin_clear_notes():
-    """Clear all notes and reminders."""
+async def admin_clear_threads():
+    """Clear all threads and reminders."""
     with engine.connect() as conn:
-        conn.execute(delete(notes))
+        conn.execute(delete(threads))
         conn.execute(delete(reminders))
         conn.commit()
 
@@ -369,9 +369,10 @@ def capabilities():
             },
             {"intent": "list_reminders", "description": "List active reminders"},
             {"intent": "get_schedule", "description": "View today's schedule"},
-            {"intent": "add_note", "description": "Save a note or memory"},
-            {"intent": "list_notes", "description": "List recent notes"},
-            {"intent": "search_notes", "description": "Search notes by topic"},
+            {"intent": "add_thread", "description": "Save a thread or memory"},
+            {"intent": "list_threads", "description": "List recent threads"},
+            {"intent": "search_threads", "description": "Search threads by topic"},
+            {"intent": "thread_delete", "description": "Delete a thread by number"},
         ],
     }
 
@@ -633,16 +634,16 @@ async def alfred_execute(req: AlfredExecuteRequest):
         names = "\n".join(confirmed)
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
-            message=f"\u2713 Got it! Confirmed:\n{names}",
+            message=f"✓ Got it! Confirmed:\n{names}",
         )
 
-    if req.intent == "add_note":
+    if req.intent == "add_thread":
         content = (req.entities.get("content") or "").strip()
         if not content:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
                 error_code="INSUFFICIENT_DATA",
-                message="What would you like me to note down?",
+                message="What would you like to save as a thread?",
             )
 
         phone = req.whatsapp_id
@@ -650,13 +651,13 @@ async def alfred_execute(req: AlfredExecuteRequest):
         # Assign per-user short ID
         with engine.connect() as conn:
             max_sid = conn.execute(
-                select(func.max(notes.c.shortId)).where(notes.c.triggerSource == phone)
+                select(func.max(threads.c.shortId)).where(threads.c.triggerSource == phone)
             ).scalar()
         next_short_id = (max_sid or 0) + 1
 
         # Extract entities + generate title via LLM — best-effort, single call
-        note_entities: dict = {"people": [], "places": [], "orgs": []}
-        note_title = ""
+        thread_entities: dict = {"people": [], "places": [], "orgs": []}
+        thread_title = ""
         try:
             from services.parser import get_client
             client = get_client()
@@ -666,7 +667,7 @@ async def alfred_execute(req: AlfredExecuteRequest):
                     {
                         "role": "system",
                         "content": (
-                            'Analyze this note. Return JSON with:\n'
+                            'Analyze this thread. Return JSON with:\n'
                             '- "title": very brief title (max 8 words or 10 Chinese chars, no quotes or punctuation)\n'
                             '- "people": array of person names explicitly mentioned\n'
                             '- "places": array of places explicitly mentioned\n'
@@ -682,52 +683,85 @@ async def alfred_execute(req: AlfredExecuteRequest):
                 timeout=8.0,
             )
             extracted = json.loads(ent_resp.choices[0].message.content)
-            note_entities = {
+            thread_entities = {
                 "people": extracted.get("people", []),
                 "places": extracted.get("places", []),
                 "orgs":   extracted.get("orgs", []),
             }
-            note_title = (extracted.get("title") or "").strip()
+            thread_title = (extracted.get("title") or "").strip()
+        except Exception:
+            pass
+
+        # Compute Intent Vector (3D) for Brain — best-effort, default to 0.5 triple
+        intent_vector: dict = {"urgency": 0.5, "social_bond": 0.5, "goal_alignment": 0.5}
+        try:
+            from services.parser import get_client as _get_client
+            _iv_client = _get_client()
+            _iv_resp = await _iv_client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "Score this message on three dimensions (0.0-1.0 each), return JSON:\n"
+                            '{"urgency": float, "social_bond": float, "goal_alignment": float}\n'
+                            "urgency: how time-sensitive or urgent is this (0=not urgent, 1=very urgent)\n"
+                            "social_bond: how much does it relate to relationships or emotions (0=none, 1=high)\n"
+                            "goal_alignment: alignment with long-term family goals (0=none, 1=high); "
+                            "default 0.5 if unclear."
+                        ),
+                    },
+                    {"role": "user", "content": content},
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=60,
+                timeout=5.0,
+            )
+            _iv_raw = json.loads(_iv_resp.choices[0].message.content)
+            intent_vector = {
+                k: max(0.0, min(1.0, float(_iv_raw.get(k, 0.5))))
+                for k in ("urgency", "social_bond", "goal_alignment")
+            }
         except Exception:
             pass
 
         now = datetime.now(timezone.utc).isoformat()
-        note_id = str(uuid.uuid4())
+        thread_id = str(uuid.uuid4())
         row = {
-            "id": note_id,
+            "id": thread_id,
             "shortId": next_short_id,
-            "title": note_title or None,
+            "title": thread_title or None,
             "content": content,
             "tags": None,
-            "entities": note_entities,
+            "entities": thread_entities,
             "triggerSource": phone,
             "status": "active",
             "createdAt": now,
             "updatedAt": now,
         }
         with engine.connect() as conn:
-            conn.execute(insert(notes).values(**row))
+            conn.execute(insert(threads).values(**row))
             conn.commit()
 
         preview = content[:50] + ("…" if len(content) > 50 else "")
-        reply = f"\u270f\ufe0f Note #{next_short_id}: {preview}"
+        reply = f"✏️ Thread #{next_short_id}: {preview}"
 
-        # Entity correlation: surface related historical notes
+        # Entity correlation: surface related historical threads
         all_ents = (
-            note_entities.get("people", []) +
-            note_entities.get("places", []) +
-            note_entities.get("orgs", [])
+            thread_entities.get("people", []) +
+            thread_entities.get("places", []) +
+            thread_entities.get("orgs", [])
         )
         if all_ents:
             with engine.connect() as conn:
                 past_rows = conn.execute(
-                    select(notes)
+                    select(threads)
                     .where(
-                        notes.c.status == "active",
-                        notes.c.triggerSource == phone,
-                        notes.c.id != note_id,
+                        threads.c.status == "active",
+                        threads.c.triggerSource == phone,
+                        threads.c.id != thread_id,
                     )
-                    .order_by(notes.c.createdAt.desc())
+                    .order_by(threads.c.createdAt.desc())
                     .limit(30)
                 ).mappings().all()
 
@@ -775,29 +809,34 @@ async def alfred_execute(req: AlfredExecuteRequest):
                     history_lines.append(f"  • {date_str}: {sid_str}{snippet}")
 
                 reply += (
-                    f"\n\n\U0001f4cb About \u300c{entity_label}\u300d"
-                    f" — {len(related)} related note(s):\n"
+                    f"\n\n\U0001f4cb About 「{entity_label}」"
+                    f" — {len(related)} related thread(s):\n"
                     + "\n".join(history_lines)
                 )
 
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message=reply,
+            data={
+                "thread_id": thread_id,
+                "short_id": next_short_id,
+                "intent_vector": intent_vector,
+            },
         )
-    if req.intent == "list_notes":
+    if req.intent == "list_threads":
         phone = req.whatsapp_id
         limit = min(int(req.entities.get("limit") or 10), 20)
         with engine.connect() as conn:
             rows = conn.execute(
-                select(notes)
-                .where(notes.c.status == "active", notes.c.triggerSource == phone)
-                .order_by(notes.c.createdAt.desc())
+                select(threads)
+                .where(threads.c.status == "active", threads.c.triggerSource == phone)
+                .order_by(threads.c.createdAt.desc())
                 .limit(limit)
             ).mappings().all()
         if not rows:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
-                message="You haven't recorded any notes yet.",
+                message="You haven't recorded any threads yet.",
             )
         tz = pytz.timezone(_DEFAULT_TZ)
         lines = []
@@ -816,31 +855,31 @@ async def alfred_execute(req: AlfredExecuteRequest):
             lines.append(f"  {sid_str}{preview} ({date_str})")
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
-            message=("Your {} note(s):\n".format(len(rows)) + "\n".join(lines)),
+            message=("Your {} thread(s):\n".format(len(rows)) + "\n".join(lines)),
         )
 
-    if req.intent == "search_notes":
+    if req.intent == "search_threads":
         query = (req.entities.get("query") or req.entities.get("content") or "").strip()
         if not query:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
                 error_code="INSUFFICIENT_DATA",
-                message="What would you like to search for in your notes?",
+                message="What would you like to search for in your threads?",
             )
         phone = req.whatsapp_id
         with engine.connect() as conn:
             rows = conn.execute(
-                select(notes)
-                .where(notes.c.status == "active", notes.c.triggerSource == phone)
-                .order_by(notes.c.createdAt.desc())
+                select(threads)
+                .where(threads.c.status == "active", threads.c.triggerSource == phone)
+                .order_by(threads.c.createdAt.desc())
             ).mappings().all()
         if not rows:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
-                message="You have no notes to search.",
+                message="You have no threads to search.",
             )
-        # Use GPT to find relevant notes
-        notes_text = "\n".join(
+        # Use GPT to find relevant threads
+        threads_text = "\n".join(
             f"{i}. {r['content']}" for i, r in enumerate(rows, 1)
         )
         try:
@@ -852,15 +891,15 @@ async def alfred_execute(req: AlfredExecuteRequest):
                     {
                         "role": "system",
                         "content": (
-                            "You are a personal assistant helping search through the user's notes. "
-                            "Given the notes list and a search query, find the most relevant notes "
+                            "You are a personal assistant helping search through the user's threads. "
+                            "Given the threads list and a search query, find the most relevant threads "
                             "and summarize what you found. Be concise (under 200 words). "
                             "If nothing is relevant, say so clearly."
                         ),
                     },
                     {
                         "role": "user",
-                        "content": f"My notes:\n{notes_text}\n\nSearch query: {query}",
+                        "content": f"My threads:\n{threads_text}\n\nSearch query: {query}",
                     },
                 ],
                 max_tokens=300,
@@ -871,36 +910,36 @@ async def alfred_execute(req: AlfredExecuteRequest):
             # Fallback: simple substring search
             matches = [r for r in rows if query.lower() in r["content"].lower()]
             if not matches:
-                answer = f'No notes found matching "{query}".'
+                answer = f'No threads found matching "{query}".'
             else:
                 lines = [f"- {r['content'][:80]}" for r in matches[:5]]
-                answer = f"Found {len(matches)} matching note(s):\n" + "\n".join(lines)
+                answer = f"Found {len(matches)} matching thread(s):\n" + "\n".join(lines)
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message=answer,
         )
 
 
-    if req.intent == "note_get":
+    if req.intent == "thread_get":
         short_id = req.entities.get("short_id")
         if short_id is None:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
-                message="Which note? Usage: /note get #<id>",
+                message="Which thread? Usage: /thread get #<id>",
             )
         phone = req.whatsapp_id
         with engine.connect() as conn:
             row = conn.execute(
-                select(notes).where(
-                    notes.c.shortId == int(short_id),
-                    notes.c.triggerSource == phone,
-                    notes.c.status == "active",
+                select(threads).where(
+                    threads.c.shortId == int(short_id),
+                    threads.c.triggerSource == phone,
+                    threads.c.status == "active",
                 )
             ).mappings().first()
         if row is None:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
-                message=f"Note #{short_id} not found.",
+                message=f"Thread #{short_id} not found.",
             )
         tz_local = pytz.timezone(_DEFAULT_TZ)
         try:
@@ -917,118 +956,127 @@ async def alfred_execute(req: AlfredExecuteRequest):
             except Exception:
                 ents = {}
         ent_parts = [", ".join(v) for v in ents.values() if v]
-        msg = "\U0001f4dd Note #{} [{}]\n{}".format(short_id, date_str, row['content'])
+        msg = "\U0001f4dd Thread #{} [{}]\n{}".format(short_id, date_str, row['content'])
         if ent_parts:
-            msg += "\n\U0001f511 {}".format(" \u00b7 ".join(ent_parts))
+            msg += "\n\U0001f511 {}".format(" · ".join(ent_parts))
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message=msg,
         )
 
-    if req.intent == "note_delete":
+    if req.intent == "thread_delete":
         short_id = req.entities.get("short_id")
         if short_id is None:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
-                message="Which note? Usage: /note delete #<id>",
+                message="Which thread? Say 'delete thread #<id>' or use /thread delete #<id>.",
             )
         phone = req.whatsapp_id
         with engine.connect() as conn:
             row = conn.execute(
-                select(notes).where(
-                    notes.c.shortId == int(short_id),
-                    notes.c.triggerSource == phone,
+                select(threads).where(
+                    threads.c.shortId == int(short_id),
+                    threads.c.triggerSource == phone,
                 )
             ).mappings().first()
         if row is None:
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="error",
-                message=f"Note #{short_id} not found.",
+                message=f"Thread #{short_id} not found.",
+            )
+        confirmed = req.entities.get("confirmed")
+        if not confirmed:
+            preview = (row["content"] or "")[:80]
+            return AlfredExecuteResponse(
+                request_id=req.request_id,
+                status="error",
+                error_code="INSUFFICIENT_DATA",
+                message=f"🗑 Delete Thread #{short_id}?\n\"{preview}\"\n\nReply yes to confirm.",
             )
         with engine.connect() as conn:
-            conn.execute(delete(notes).where(notes.c.id == row["id"]))
+            conn.execute(delete(threads).where(threads.c.id == row["id"]))
             conn.commit()
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
-            message=f"✅ Note #{short_id} deleted.",
+            message=f"✅ Thread #{short_id} deleted.",
         )
 
-    if req.intent == "note_link":
-        note_a = req.entities.get("note_a")
-        note_b = req.entities.get("note_b")
-        if not note_a or not note_b:
+    if req.intent == "thread_link":
+        thread_a = req.entities.get("thread_a")
+        thread_b = req.entities.get("thread_b")
+        if not thread_a or not thread_b:
             return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Usage: /link #<id_A> #<id_B>")
-        if int(note_a) == int(note_b):
-            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Cannot link a note to itself.")
+        if int(thread_a) == int(thread_b):
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Cannot link a thread to itself.")
         phone = req.whatsapp_id
         with engine.connect() as conn:
-            row_a = conn.execute(select(notes).where(notes.c.shortId == int(note_a), notes.c.triggerSource == phone)).mappings().first()
-            row_b = conn.execute(select(notes).where(notes.c.shortId == int(note_b), notes.c.triggerSource == phone)).mappings().first()
+            row_a = conn.execute(select(threads).where(threads.c.shortId == int(thread_a), threads.c.triggerSource == phone)).mappings().first()
+            row_b = conn.execute(select(threads).where(threads.c.shortId == int(thread_b), threads.c.triggerSource == phone)).mappings().first()
         if not row_a:
-            return AlfredExecuteResponse(request_id=req.request_id, status="error", message=f"Note #{note_a} not found.")
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message=f"Thread #{thread_a} not found.")
         if not row_b:
-            return AlfredExecuteResponse(request_id=req.request_id, status="error", message=f"Note #{note_b} not found.")
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message=f"Thread #{thread_b} not found.")
         with engine.connect() as conn:
-            existing = conn.execute(select(note_links).where(
-                ((note_links.c.note_id == row_a["id"]) & (note_links.c.linked_note_id == row_b["id"])) |
-                ((note_links.c.note_id == row_b["id"]) & (note_links.c.linked_note_id == row_a["id"]))
+            existing = conn.execute(select(thread_links).where(
+                ((thread_links.c.thread_id == row_a["id"]) & (thread_links.c.linked_thread_id == row_b["id"])) |
+                ((thread_links.c.thread_id == row_b["id"]) & (thread_links.c.linked_thread_id == row_a["id"]))
             )).first()
             if not existing:
-                conn.execute(insert(note_links).values(
+                conn.execute(insert(thread_links).values(
                     id=str(uuid.uuid4()),
-                    note_id=row_a["id"],
-                    linked_note_id=row_b["id"],
+                    thread_id=row_a["id"],
+                    linked_thread_id=row_b["id"],
                     created_by=phone,
                     createdAt=datetime.now(timezone.utc).isoformat(),
                 ))
                 conn.commit()
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
-            message="\U0001f517 Linked #{} and #{}.".format(note_a, note_b),
+            message="\U0001f517 Linked #{} and #{}.".format(thread_a, thread_b),
         )
 
-    if req.intent == "note_unlink":
-        note_a = req.entities.get("note_a")
-        note_b = req.entities.get("note_b")
-        if not note_a or not note_b:
+    if req.intent == "thread_unlink":
+        thread_a = req.entities.get("thread_a")
+        thread_b = req.entities.get("thread_b")
+        if not thread_a or not thread_b:
             return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Usage: /unlink #<id_A> #<id_B>")
         phone = req.whatsapp_id
         with engine.connect() as conn:
-            row_a = conn.execute(select(notes).where(notes.c.shortId == int(note_a), notes.c.triggerSource == phone)).mappings().first()
-            row_b = conn.execute(select(notes).where(notes.c.shortId == int(note_b), notes.c.triggerSource == phone)).mappings().first()
+            row_a = conn.execute(select(threads).where(threads.c.shortId == int(thread_a), threads.c.triggerSource == phone)).mappings().first()
+            row_b = conn.execute(select(threads).where(threads.c.shortId == int(thread_b), threads.c.triggerSource == phone)).mappings().first()
         if not row_a or not row_b:
-            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="One or both notes not found.")
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="One or both threads not found.")
         with engine.connect() as conn:
-            conn.execute(delete(note_links).where(
-                ((note_links.c.note_id == row_a["id"]) & (note_links.c.linked_note_id == row_b["id"])) |
-                ((note_links.c.note_id == row_b["id"]) & (note_links.c.linked_note_id == row_a["id"]))
+            conn.execute(delete(thread_links).where(
+                ((thread_links.c.thread_id == row_a["id"]) & (thread_links.c.linked_thread_id == row_b["id"])) |
+                ((thread_links.c.thread_id == row_b["id"]) & (thread_links.c.linked_thread_id == row_a["id"]))
             ))
             conn.commit()
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
-            message="✂️ Link removed between #{} and #{}.".format(note_a, note_b),
+            message="✂️ Link removed between #{} and #{}.".format(thread_a, thread_b),
         )
 
-    if req.intent == "note_links":
+    if req.intent == "thread_links":
         short_id = req.entities.get("short_id")
         if not short_id:
-            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Usage: /note links #<id>")
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Usage: /thread links #<id>")
         phone = req.whatsapp_id
         with engine.connect() as conn:
-            target = conn.execute(select(notes).where(
-                notes.c.shortId == int(short_id), notes.c.triggerSource == phone
+            target = conn.execute(select(threads).where(
+                threads.c.shortId == int(short_id), threads.c.triggerSource == phone
             )).mappings().first()
         if not target:
-            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Note #{} not found.".format(short_id))
+            return AlfredExecuteResponse(request_id=req.request_id, status="error", message="Thread #{} not found.".format(short_id))
         with engine.connect() as conn:
-            lnks = conn.execute(select(note_links).where(
-                (note_links.c.note_id == target["id"]) | (note_links.c.linked_note_id == target["id"])
+            lnks = conn.execute(select(thread_links).where(
+                (thread_links.c.thread_id == target["id"]) | (thread_links.c.linked_thread_id == target["id"])
             )).mappings().all()
-        linked_ids = [lnk["linked_note_id"] if lnk["note_id"] == target["id"] else lnk["note_id"] for lnk in lnks]
+        linked_ids = [lnk["linked_thread_id"] if lnk["thread_id"] == target["id"] else lnk["thread_id"] for lnk in lnks]
         explicit_shorts: list[tuple] = []
         if linked_ids:
             with engine.connect() as conn:
-                exp_rows = conn.execute(select(notes).where(notes.c.id.in_(linked_ids))).mappings().all()
+                exp_rows = conn.execute(select(threads).where(threads.c.id.in_(linked_ids))).mappings().all()
             explicit_shorts = [(r.get("shortId"), r["content"][:50]) for r in exp_rows]
         tgt_ents = target.get("entities") or {}
         if isinstance(tgt_ents, str):
@@ -1042,10 +1090,10 @@ async def alfred_execute(req: AlfredExecuteRequest):
         entity_shorts: list[tuple] = []
         if my_ents:
             with engine.connect() as conn:
-                past = conn.execute(select(notes).where(
-                    notes.c.triggerSource == phone,
-                    notes.c.id != target["id"],
-                    notes.c.status == "active",
+                past = conn.execute(select(threads).where(
+                    threads.c.triggerSource == phone,
+                    threads.c.id != target["id"],
+                    threads.c.status == "active",
                 )).mappings().all()
             for r in past:
                 r_ents = r.get("entities") or {}
@@ -1069,10 +1117,10 @@ async def alfred_execute(req: AlfredExecuteRequest):
             for sid, snip in entity_shorts[:5]:
                 lines.append("  #{}: {}".format(sid, snip))
         if not lines:
-            return AlfredExecuteResponse(request_id=req.request_id, status="success", message="Note #{} has no related notes.".format(short_id))
+            return AlfredExecuteResponse(request_id=req.request_id, status="success", message="Thread #{} has no related threads.".format(short_id))
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
-            message="Note #{} connections:\n".format(short_id) + "\n".join(lines),
+            message="Thread #{} connections:\n".format(short_id) + "\n".join(lines),
         )
 
     return AlfredExecuteResponse(

@@ -24,7 +24,7 @@ class SimMessage:
 DEFAULT_PHONES = [
     VirtualPhone(phone="+18005550001", name="Alice",  color="cyan",    group="finance"),
     VirtualPhone(phone="+18005550002", name="Bob",    color="green",   group="reminders"),
-    VirtualPhone(phone="+18005550003", name="Carol",  color="yellow",  group="notes"),
+    VirtualPhone(phone="+18005550003", name="Carol",  color="yellow",  group="threads"),
     VirtualPhone(phone="+18005550004", name="Dave",   color="magenta", group="chat"),
     VirtualPhone(phone="+18005550005", name="Eve",    color="red",     group="errors"),
 ]

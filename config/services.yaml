@@ -13,18 +13,33 @@ services:
       - set_budget
       - process_receipt_image
 
-  nudge:
-    name: Nudge
-    url: http://localhost:8002/api/nudge      # overridden by NUDGE_URL in Docker
-    url_env: NUDGE_URL
-    api_key_env: NUDGE_API_KEY
-    description: Reminder and schedule service
+  thread:
+    name: Thread
+    url: http://localhost:8002/api/thread      # overridden by THREAD_URL in Docker
+    url_env: THREAD_URL
+    api_key_env: THREAD_API_KEY
+    description: Unified Thread lifecycle management
     intents:
+      - add_thread
       - add_reminder
+      - list_threads
       - list_reminders
+      - search_threads
       - get_schedule
       - cancel_reminder
       - acknowledge_reminder
-      - add_note
-      - list_notes
-      - search_notes
+      - snooze_thread
+      - dismiss_thread
+      - thread_get
+      - thread_delete
+      - thread_link
+      - thread_unlink
+      - thread_links
+
+  brain:
+    name: Brain
+    url: http://localhost:8003/api/brain      # overridden by BRAIN_URL in Docker
+    url_env: BRAIN_URL
+    api_key_env: BRAIN_API_KEY
+    description: Family knowledge graph and weaving engine
+    intents: []                               # Brain receives events, not skill dispatches

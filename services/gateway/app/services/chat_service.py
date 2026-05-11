@@ -20,7 +20,8 @@ You have three built-in capabilities that you can route users to:
 send a photo of a receipt.
 2. Reminders & alarms — users say things like "Remind me to take medicine at 9pm" \
 or "Set an alarm for 7am tomorrow".
-3. Personal notes — users say things like "Note: dentist appointment is next Tuesday" \
+3. Personal threads (also called notes — the two words are interchangeable) — users say \
+things like "Thread: dentist appointment is next Tuesday", "Note: dentist...", \
 or "记一下 明天买降压药".
 
 For general questions, small talk, stories, advice, or anything outside those three \
@@ -33,8 +34,8 @@ Respond in the same language the user writes in (Chinese or English).\
 """
 
 _FALLBACK = (
-    "Sorry, I didn't understand that. I can help with expenses, reminders, or notes — "
-    'try saying something like "Spent $20 on lunch" or "Remind me at 9am".'
+    "Sorry, I didn't understand that. I can help with expenses, reminders, or notes/threads — "
+    'try saying something like "Spent $20 on lunch", "Remind me at 9am", or "Note: bought medicine".'
 )
 
 

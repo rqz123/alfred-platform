@@ -1,0 +1,92 @@
+from typing import Optional, Literal
+from pydantic import BaseModel
+
+
+class ParseRequest(BaseModel):
+    input: str
+    timezone: str
+
+
+class ParsedReminder(BaseModel):
+    title: str
+    body: Optional[str] = None
+    type: Literal["once", "recurring", "event"]
+    fireAt: Optional[str] = None
+    cronExpression: Optional[str] = None
+    timezone: str
+
+
+class ParseResponse(BaseModel):
+    reminder: ParsedReminder
+    confidence: float
+    rawInterpretation: str
+
+
+class ReminderCreate(BaseModel):
+    title: str
+    body: Optional[str] = None
+    type: Literal["once", "recurring", "event"]
+    fireAt: Optional[str] = None
+    cronExpression: Optional[str] = None
+    timezone: str
+    triggerSource: Optional[str] = None
+    triggerCondition: Optional[dict] = None
+
+
+class ReminderUpdate(BaseModel):
+    status: Literal["active", "paused", "done"]
+
+
+# ── Thread models ─────────────────────────────────────────────────────
+
+class ThreadCreate(BaseModel):
+    content: str
+    category: Optional[str] = "life"       # pro | life | emo | routine
+    tags: Optional[list[str]] = None
+    triggerSource: Optional[str] = None
+    trigger: Optional[dict] = None          # set by add_reminder; None for plain add_thread
+    source: Optional[str] = "web"
+    priority: Optional[str] = None
+
+
+class ThreadOut(BaseModel):
+    id: str
+    shortId: Optional[int] = None
+    title: Optional[str] = None
+    content: str
+    category: Optional[str] = None
+    tags: Optional[list[str]] = None
+    entities: Optional[dict] = None
+    relatedIds: Optional[list[int]] = None
+    triggerSource: Optional[str] = None
+    trigger: Optional[dict] = None          # {type, fire_at, cron, location, ack_status, ack_timeout_at}
+    snoozeCount: Optional[int] = 0
+    source: Optional[str] = None
+    priority: Optional[str] = None
+    status: str
+    createdAt: str
+    updatedAt: str
+
+
+class ThreadUpdate(BaseModel):
+    status: Literal["active", "sleeping", "archived"]
+
+
+class ReminderOut(BaseModel):
+    id: str
+    title: str
+    body: Optional[str] = None
+    type: str
+    fireAt: Optional[str] = None
+    cronExpression: Optional[str] = None
+    timezone: str
+    triggerSource: Optional[str] = None
+    triggerCondition: Optional[dict] = None
+    shortName: Optional[str] = None
+    status: str   # active | paused | awaiting | done | expired
+    lastFiredAt: Optional[str] = None
+    firstFiredAt: Optional[str] = None
+    nextFireAt: Optional[str] = None
+    ackRetries: Optional[str] = None
+    createdAt: str
+    updatedAt: str

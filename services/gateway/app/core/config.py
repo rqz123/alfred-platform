@@ -32,10 +32,13 @@ class Settings(BaseSettings):
     tts_audio_format: str = "mp3"
     dispatch_enabled: bool = False
     ourcents_api_key: str = ""
-    nudge_api_key: str = ""
+    thread_api_key: str = ""
+    nudge_api_key: str = ""            # kept for backward compat; mirrors thread_api_key
     alfred_internal_key: str = ""
     intent_openai_api_key: str = ""
     intent_openai_model: str = "gpt-4o-mini"
+    brain_url: str = "http://localhost:8003"
+    brain_api_key: str = ""
 
     model_config = SettingsConfigDict(
         # Try root monorepo .env first, then local .env for overrides

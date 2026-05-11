@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, Form, Header, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request, Response, UploadFile, status
 from pydantic import BaseModel
 from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordRequestForm
@@ -501,7 +501,12 @@ def receive_service_push(
     """Downstream services (OurCents, Nudge) call this to push a message to a user."""
     settings = get_settings()
     valid_keys = {
-        k for k in [settings.ourcents_api_key, settings.nudge_api_key, settings.alfred_internal_key]
+        k for k in [
+            settings.ourcents_api_key,
+            settings.nudge_api_key,
+            settings.thread_api_key,
+            settings.alfred_internal_key,
+        ]
         if k
     }
     if not valid_keys or x_alfred_api_key not in valid_keys:
@@ -560,6 +565,29 @@ def receive_service_push(
         logger.warning("Failed to persist push message: %s", exc)
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@internal_router.post("/internal/location_heartbeat", status_code=status.HTTP_204_NO_CONTENT)
+def receive_location_heartbeat(
+    request: Request,
+    payload: dict,
+    response: Response,
+):
+    """Brain sends geofence heartbeat config; Gateway logs it for mobile clients to poll."""
+    valid_keys = {settings.alfred_internal_key, settings.thread_api_key}
+    api_key = request.headers.get("X-Alfred-API-Key", "")
+    if api_key not in valid_keys:
+        response.status_code = status.HTTP_403_FORBIDDEN
+        return
+    interval_secs = payload.get("interval_seconds", 300)
+    active_geofences = payload.get("active_geofences", 0)
+    logger.info(
+        "Geofence heartbeat config received — interval=%ds, active=%d",
+        interval_secs,
+        active_geofences,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
 
 # ── Log viewer (admin only) ───────────────────────────────────────────────────
 

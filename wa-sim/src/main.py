@@ -464,7 +464,7 @@ def main() -> None:
     parser.add_argument("--group", metavar="GROUP",
                         help="With --daemon: filter to this group. "
                              "Standalone: run all scenarios in the group once and exit. "
-                             "(finance / reminders / notes / chat / errors)")
+                             "(finance / reminders / threads / chat / errors)")
     parser.add_argument("--loop", type=int, default=0, metavar="N",
                         help="With --auto/--concurrent: pick N random scenarios per group "
                              "instead of running each once (0 = run each once)")

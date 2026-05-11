@@ -28,8 +28,32 @@ from sqlmodel import Session
 
 import app.repositories.account_repository as repo
 
+import threading
+
 # phone → {"action": str, ...}
 _pending_confirmations: dict[str, dict] = {}
+
+
+def _init_persona(user_phone: str, family_id: str, display_name: str | None = None) -> None:
+    """Fire-and-forget: initialize PersonaProfile in Brain when a user joins a family."""
+    def _post():
+        from app.core.config import get_settings
+        settings = get_settings()
+        brain_url = getattr(settings, "brain_url", None) or os.environ.get("BRAIN_URL", "")
+        brain_key = getattr(settings, "alfred_internal_key", None) or os.environ.get("ALFRED_INTERNAL_KEY", "")
+        if not brain_url or not brain_key:
+            return
+        try:
+            httpx.post(
+                f"{brain_url}/api/brain/personas",
+                json={"user_phone": user_phone, "family_id": family_id, "display_name": display_name},
+                headers={"X-Alfred-API-Key": brain_key},
+                timeout=5.0,
+            )
+        except Exception:
+            pass
+
+    threading.Thread(target=_post, daemon=True).start()
 
 _ADMIN_PREFIXES = (
     "/add user",
@@ -43,28 +67,26 @@ _ADMIN_PREFIXES = (
     "/status",
 )
 
-_NOTE_CMD_PREFIXES = (
-    "/note get",
-    "/note list",
-    "/note delete",
-    "/note links",
+_THREAD_CMD_PREFIXES = (
+    "/thread get", "/thread list", "/thread delete", "/thread links",
+    "/note get",   "/note list",   "/note delete",   "/note links",
     "/find",
     "/link",
     "/unlink",
 )
 
 
-def _call_nudge_sync(phone: str, intent: str, entities: dict) -> str:
-    """Synchronously POST to nudge /alfred/execute and return the reply message."""
+def _call_thread_sync(phone: str, intent: str, entities: dict) -> str:
+    """Synchronously POST to Thread service /alfred/execute and return the reply message."""
     from app.core.config import get_settings
     settings = get_settings()
-    nudge_key = getattr(settings, "nudge_api_key", None) or os.environ.get("NUDGE_API_KEY", "")
-    nudge_url = os.environ.get("NUDGE_URL", "http://localhost:8002/api/nudge")
-    if not nudge_key:
-        return "Note service not configured."
+    thread_key = getattr(settings, "thread_api_key", None) or os.environ.get("THREAD_API_KEY", "")
+    thread_url = os.environ.get("THREAD_URL", "http://localhost:8002/api/thread")
+    if not thread_key:
+        return "Thread service not configured."
     try:
         r = httpx.post(
-            f"{nudge_url}/alfred/execute",
+            f"{thread_url}/alfred/execute",
             json={
                 "request_id": str(uuid4()),
                 "user_id": phone,
@@ -74,13 +96,13 @@ def _call_nudge_sync(phone: str, intent: str, entities: dict) -> str:
                 "session": {},
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             },
-            headers={"X-Alfred-API-Key": nudge_key},
+            headers={"X-Alfred-API-Key": thread_key},
             timeout=12.0,
         )
         r.raise_for_status()
         return r.json().get("message", "") or "Done."
     except Exception:
-        return "⚠️ Note service error. Please try again."
+        return "⚠️ Thread service error. Please try again."
 
 
 def handle_bot_command(session: Session, phone: str, text: str) -> Optional[str]:
@@ -103,9 +125,9 @@ def handle_bot_command(session: Session, phone: str, text: str) -> Optional[str]
 
     lower = stripped.lower()
 
-    # Note commands — available to all registered users
-    if any(lower.startswith(p) for p in _NOTE_CMD_PREFIXES):
-        return _dispatch_note_command(phone, stripped)
+    # Thread commands — available to all registered users
+    if any(lower.startswith(p) for p in _THREAD_CMD_PREFIXES):
+        return _dispatch_thread_command(phone, stripped)
 
     if user.role != "admin":
         if any(lower.startswith(p) for p in _ADMIN_PREFIXES):
@@ -115,52 +137,56 @@ def handle_bot_command(session: Session, phone: str, text: str) -> Optional[str]
     return _dispatch_command(session, user, stripped)
 
 
-# ── Note commands (all registered users) ──────────────────────────────────────
+# ── Thread commands (all registered users) ──────────────────────────────────────
 
-def _dispatch_note_command(phone: str, text: str) -> Optional[str]:
+def _dispatch_thread_command(phone: str, text: str) -> Optional[str]:
     lower = text.lower().strip()
+    # /note X is a user-facing alias for /thread X
+    if lower.startswith("/note"):
+        text = "/thread" + text[5:]
+        lower = "/thread" + lower[5:]
 
-    if lower.startswith("/note get"):
+    if lower.startswith("/thread get"):
         m = re.search(r"#?(\d+)", text)
         if not m:
-            return "Usage: /note get #<id>"
-        return _call_nudge_sync(phone, "note_get", {"short_id": int(m.group(1))})
+            return "Usage: /thread get #<id>"
+        return _call_thread_sync(phone, "thread_get", {"short_id": int(m.group(1))})
 
-    if lower.startswith("/note list"):
-        m = re.search(r"/note\s+list\s+(\d+)", text, re.IGNORECASE)
+    if lower.startswith("/thread list"):
+        m = re.search(r"/thread\s+list\s+(\d+)", text, re.IGNORECASE)
         limit = int(m.group(1)) if m else 5
-        return _call_nudge_sync(phone, "list_notes", {"limit": limit})
+        return _call_thread_sync(phone, "list_threads", {"limit": limit})
 
-    if lower.startswith("/note delete"):
+    if lower.startswith("/thread delete"):
         m = re.search(r"#?(\d+)", text)
         if not m:
-            return "Usage: /note delete #<id>"
+            return "Usage: /thread delete #<id>"
         short_id = int(m.group(1))
-        _pending_confirmations[phone] = {"action": "note_delete", "short_id": short_id}
-        return f"⚠️ Delete Note #{short_id}? Reply Y to confirm."
+        _pending_confirmations[phone] = {"action": "thread_delete", "short_id": short_id}
+        return f"⚠️ Delete Thread #{short_id}? Reply Y to confirm."
 
-    if lower.startswith("/note links"):
+    if lower.startswith("/thread links"):
         m = re.search(r"#?(\d+)", text)
         short_id = int(m.group(1)) if m else None
-        return _call_nudge_sync(phone, "note_links", {"short_id": short_id})
+        return _call_thread_sync(phone, "thread_links", {"short_id": short_id})
 
     if lower.startswith("/find"):
         query = text[5:].strip()
         if not query:
             return "Usage: /find <search term>"
-        return _call_nudge_sync(phone, "search_notes", {"query": query})
+        return _call_thread_sync(phone, "search_threads", {"query": query})
 
     if lower.startswith("/link"):
         ids = re.findall(r"#?(\d+)", text)
         if len(ids) < 2:
             return "Usage: /link #<id_A> #<id_B>"
-        return _call_nudge_sync(phone, "note_link", {"note_a": int(ids[0]), "note_b": int(ids[1])})
+        return _call_thread_sync(phone, "thread_link", {"thread_a": int(ids[0]), "thread_b": int(ids[1])})
 
     if lower.startswith("/unlink"):
         ids = re.findall(r"#?(\d+)", text)
         if len(ids) < 2:
             return "Usage: /unlink #<id_A> #<id_B>"
-        return _call_nudge_sync(phone, "note_unlink", {"note_a": int(ids[0]), "note_b": int(ids[1])})
+        return _call_thread_sync(phone, "thread_unlink", {"thread_a": int(ids[0]), "thread_b": int(ids[1])})
 
     return None
 
@@ -210,10 +236,10 @@ def _handle_confirmation(session: Session, phone: str, text: str) -> str:
         repo.delete_user(session, target)
         return f"✅ User {target_phone} removed."
 
-    if pending["action"] == "note_delete":
+    if pending["action"] == "thread_delete":
         if not confirmed:
             return "Cancelled."
-        return _call_nudge_sync(phone, "note_delete", {"short_id": pending["short_id"]})
+        return _call_thread_sync(phone, "thread_delete", {"short_id": pending["short_id"], "confirmed": True})
 
     return "Unknown action."
 
@@ -345,6 +371,7 @@ def _cmd_family_add(session: Session, text: str) -> str:
         return f"❌ Family {family_id} not found."
 
     repo.update_user(session, user, family_id=family_id)
+    _init_persona(target_phone, family_id, display_name=user.display_name)
     return f"✅ {target_phone} added to {family.name}."
 
 

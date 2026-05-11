@@ -305,7 +305,7 @@ def clear_all_data(
     admin: AlfredUser = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> Response:
-    """Clear all chat conversations, receipts, and notes. Preserves all user/family/admin records."""
+    """Clear all chat conversations, receipts, and threads. Preserves all user/family/admin records."""
     from app.repositories.chat_repository import delete_all_conversations
     from app.services.service_registry import ServiceRegistry
 
@@ -313,7 +313,7 @@ def clear_all_data(
     delete_all_conversations(session)
 
     # 2. Clear OurCents receipts and income entries
-    # 3. Clear nudge notes
+    # 3. Clear nudge threads
     registry = ServiceRegistry()
     _clear_service(registry, intent="add_expense", path="/alfred/admin/clear")
     _clear_service(registry, intent="add_reminder", path="/alfred/admin/clear")
@@ -326,7 +326,7 @@ def clear_logs(
     admin: AlfredUser = Depends(require_admin),
     session: Session = Depends(get_session),
 ) -> Response:
-    """Clear all chat conversations and messages only. Preserves receipts, notes, and user records."""
+    """Clear all chat conversations and messages only. Preserves receipts, threads, and user records."""
     from app.repositories.chat_repository import delete_all_conversations
     delete_all_conversations(session)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

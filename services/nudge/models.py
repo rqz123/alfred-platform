@@ -37,15 +37,15 @@ class ReminderUpdate(BaseModel):
     status: Literal["active", "paused", "done"]
 
 
-# ── Note models ─────────────────────────────────────────────────────
+# ── Thread models ─────────────────────────────────────────────────────
 
-class NoteCreate(BaseModel):
+class ThreadCreate(BaseModel):
     content: str
     tags: Optional[list[str]] = None
     triggerSource: Optional[str] = None
 
 
-class NoteOut(BaseModel):
+class ThreadOut(BaseModel):
     id: str
     shortId: Optional[int] = None
     title: Optional[str] = None
@@ -59,7 +59,7 @@ class NoteOut(BaseModel):
     updatedAt: str
 
 
-class NoteUpdate(BaseModel):
+class ThreadUpdate(BaseModel):
     status: Literal["active", "archived"]
 
 

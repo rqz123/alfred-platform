@@ -12,6 +12,7 @@ run_group()            → dict   (summary for one group)
 
 import asyncio
 import random
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,7 @@ async def run_scenario(
     group = scenario.get("group", "ungrouped")
     total_steps = len(steps)
     failed_steps = 0
+    run_id = uuid.uuid4().hex[:8]
 
     # Discard stale replies for any phone used in this scenario before starting.
     scenario_phones = {step["phone"] for step in steps}
@@ -85,9 +87,10 @@ async def run_scenario(
 
     for i, step in enumerate(steps, 1):
         phone: str = step["phone"]
-        body: str = step["send"]
+        body: str = _render_step_text(step["send"], run_id)
         name: str = (phone_names or {}).get(phone, phone)
-        expect: str | None = step.get("expect_contains")
+        expect_raw: str | None = step.get("expect_contains")
+        expect: str | None = _render_step_text(expect_raw, run_id) if expect_raw is not None else None
         no_wait: bool = step.get("no_wait", False)
         pause: float = step.get("pause", 0.0)
         timeout: float = step.get("timeout", REPLY_TIMEOUT)
@@ -174,6 +177,11 @@ async def run_scenario(
         passed=passed, total_steps=total_steps, failed_steps=failed_steps,
     )
     return passed
+
+
+def _render_step_text(value: str, run_id: str) -> str:
+    """Render deterministic per-scenario placeholders in scenario text."""
+    return value.replace("{{run_id}}", run_id)
 
 
 # ── Group runner ───────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 #
 # Each scenario has:
 #   name:        unique identifier
-#   group:       phone group that owns this scenario (finance/reminders/notes/chat/errors)
+#   group:       phone group that owns this scenario (finance/reminders/threads/chat/errors)
 #   weight:      relative pick probability within the group (default 1)
 #   description: human-readable summary
 #   steps:       ordered list of send/check steps
@@ -132,69 +132,71 @@ scenarios:
         # After MAX_RETRIES Alfred should abandon
 
 
-  # ── GROUP: reminders ──────────────────────────────────────────
-  # Bob (+18005550002) tests all reminder intents
+  # ── GROUP: triggers (v0.9 Unified Thread — trigger field) ─────
+  # Bob (+18005550002) tests trigger creation via Thread service.
+  # v0.9 contract: reply MUST include "#" (shortId) because all triggers
+  # are saved as Unified Threads. "reminder" text check is legacy — use "#".
 
   - name: add_reminder_single
-    group: reminders
+    group: triggers
     weight: 3
-    description: "Set a reminder in one message"
+    description: "Set a once-trigger thread in one message — reply must include shortId"
     steps:
       - phone: "+18005550002"
         send: "明天下午2点提醒我开会"
-        expect_contains: "reminder"
+        expect_contains: "#"
 
   - name: add_reminder_multiturn
-    group: reminders
+    group: triggers
     weight: 2
-    description: "Set a reminder — title first, time in second message"
+    description: "Set a trigger thread — title first, time in second message"
     steps:
       - phone: "+18005550002"
         send: "remind me to meet friends"
       - phone: "+18005550002"
         send: "tomorrow at noon"
-        expect_contains: "reminder"
+        expect_contains: "#"
 
   - name: add_reminder_english
-    group: reminders
+    group: triggers
     weight: 2
-    description: "English alarm request"
+    description: "English once-trigger thread"
     steps:
       - phone: "+18005550002"
         send: "set an alarm at 7:30am"
-        expect_contains: "reminder"
+        expect_contains: "#"
 
   - name: add_reminder_recurring
-    group: reminders
+    group: triggers
     weight: 1
-    description: "Set a recurring weekly reminder"
+    description: "Recurring trigger thread (cron) — reply includes shortId"
     steps:
       - phone: "+18005550002"
         send: "每周一早上9点提醒我开会"
-        expect_contains: "reminder"
+        expect_contains: "#"
         timeout: 60
 
   - name: add_reminder_tonight
-    group: reminders
+    group: triggers
     weight: 1
-    description: "Tonight reminder (should never shift to tomorrow)"
+    description: "Tonight trigger thread (fire_at same day)"
     steps:
       - phone: "+18005550002"
         send: "今晚提醒我锁门"
-        expect_contains: "reminder"
+        expect_contains: "#"
 
-  - name: list_reminders
-    group: reminders
+  - name: list_triggers
+    group: triggers
     weight: 2
-    description: "List active reminders"
+    description: "List active trigger threads"
     steps:
       - phone: "+18005550002"
         send: "我的提醒"
 
-  - name: acknowledge_reminder
-    group: reminders
+  - name: acknowledge_trigger
+    group: triggers
     weight: 2
-    description: "Acknowledge a reminder with various affirmative phrases"
+    description: "Acknowledge a fired trigger with affirmative phrases"
     steps:
       - phone: "+18005550002"
         send: "Ok"
@@ -208,34 +210,44 @@ scenarios:
         pause: 1.0
         send: "收到"
 
-  - name: cancel_reminder_by_number
-    group: reminders
+  - name: cancel_trigger_by_number
+    group: triggers
     weight: 1
-    description: "Cancel reminder #1"
+    description: "Create a trigger then cancel it using 提醒N trailing-digit extraction (R2 fix)"
     steps:
       - phone: "+18005550002"
-        send: "取消提醒1"
+        send: "remind me to review_cancel_alpha tomorrow at 10am"
+        expect_contains: "#"
+      - phone: "+18005550002"
+        pause: 1.0
+        send: "取消提醒 review_cancel_alpha"
+        expect_contains: "Cancelled"
 
-  - name: cancel_reminder_by_name
-    group: reminders
+  - name: cancel_trigger_by_name
+    group: triggers
     weight: 1
-    description: "Cancel a named reminder"
+    description: "Create a trigger then cancel it via partial word-set name match (R3 fix)"
     steps:
       - phone: "+18005550002"
-        send: "cancel reminder meeting"
+        send: "remind me to attend the quarterly_standup_review tomorrow at 3pm"
+        expect_contains: "#"
+      - phone: "+18005550002"
+        pause: 1.0
+        send: "cancel reminder quarterly_standup"
+        expect_contains: "Cancelled"
 
   - name: get_schedule
-    group: reminders
+    group: triggers
     weight: 1
     description: "Ask about today's schedule"
     steps:
       - phone: "+18005550002"
         send: "今天有什么安排"
 
-  - name: reminder_cancel_midflow
-    group: reminders
+  - name: trigger_cancel_midflow
+    group: triggers
     weight: 1
-    description: "Start setting a reminder then cancel"
+    description: "Start setting a trigger then cancel"
     steps:
       - phone: "+18005550002"
         send: "remind me"
@@ -243,198 +255,217 @@ scenarios:
         send: "算了，不用了"
         expect_contains: "Cancelled"
 
+  # v0.9 Unified Thread trigger-specific contract tests
+  - name: trigger_create_with_shortid
+    group: triggers
+    weight: 2
+    description: "v0.9: trigger creation must return shortId (#N) in reply"
+    steps:
+      - phone: "+18005550002"
+        send: "remind me to take medication tomorrow at 8am"
+        expect_contains: "#"
 
-  # ── GROUP: notes ──────────────────────────────────────────────
-  # Carol (+18005550003) tests all notes intents
+  - name: trigger_thread_no_time
+    group: triggers
+    weight: 1
+    description: "v0.9: thread-only (no trigger time) — saved as trigger.type=none, returns #"
+    steps:
+      - phone: "+18005550002"
+        send: "thread: need to renew car insurance before it expires"
+        expect_contains: "#"
 
-  - name: add_note_chinese
-    group: notes
+
+  # ── GROUP: threads ──────────────────────────────────────────────
+  # Carol (+18005550003) tests all threads intents
+
+  - name: add_thread_chinese
+    group: threads
     weight: 3
-    description: "Save a Chinese note"
+    description: "Save a Chinese thread"
     steps:
       - phone: "+18005550003"
         send: "记一下需要去药房拿药"
-        expect_contains: "note"
+        expect_contains: "thread"
 
-  - name: add_note_english
-    group: notes
+  - name: add_thread_english
+    group: threads
     weight: 2
-    description: "Save an English note"
+    description: "Save an English thread"
     steps:
       - phone: "+18005550003"
         send: "note: buy milk and bread on the way home"
-        expect_contains: "note"
+        expect_contains: "thread"
 
-  - name: add_note_jot
-    group: notes
+  - name: add_thread_jot
+    group: threads
     weight: 1
-    description: "Save a note using 'jot' trigger word"
+    description: "Save a thread using 'jot' trigger word"
     steps:
       - phone: "+18005550003"
         send: "jot call landlord about the heater"
-        expect_contains: "note"
+        expect_contains: "thread"
 
-  - name: add_note_write_down
-    group: notes
+  - name: add_thread_write_down
+    group: threads
     weight: 1
-    description: "Save a note using 'write down' trigger"
+    description: "Save a thread using 'write down' trigger"
     steps:
       - phone: "+18005550003"
         send: "write down the wifi password is Alfred2025"
-        expect_contains: "note"
+        expect_contains: "thread"
 
-  - name: list_notes
-    group: notes
+  - name: list_threads
+    group: threads
     weight: 2
-    description: "List recent notes"
+    description: "List recent threads"
     steps:
       - phone: "+18005550003"
         send: "我的笔记"
 
-  - name: list_notes_english
-    group: notes
+  - name: list_threads_english
+    group: threads
     weight: 1
-    description: "List notes in English"
+    description: "List threads in English"
     steps:
       - phone: "+18005550003"
         send: "list notes"
 
-  - name: search_notes_chinese
-    group: notes
+  - name: search_threads_chinese
+    group: threads
     weight: 2
-    description: "Search notes by Chinese keyword"
+    description: "Search threads by Chinese keyword"
     steps:
       - phone: "+18005550003"
         send: "找笔记 药房"
 
-  - name: search_notes_english
-    group: notes
+  - name: search_threads_english
+    group: threads
     weight: 1
-    description: "Search notes by English keyword"
+    description: "Search threads by English keyword"
     steps:
       - phone: "+18005550003"
         send: "find note milk"
 
-  - name: add_note_trigger_only
-    group: notes
+  - name: add_thread_trigger_only
+    group: threads
     weight: 1
-    description: "Note trigger with no content — should NOT save (none intent)"
+    description: "Thread trigger with no content — should NOT save (none intent)"
     steps:
       - phone: "+18005550003"
         send: "笔记"
-        # Alfred should NOT save an empty note; likely chat or 'none' response
+        # Alfred should NOT save an empty thread; likely chat or 'none' response
 
   # ── New design (v1.2): natural-language event creation ─────────
-  - name: add_note_event_statement
-    group: notes
+  - name: add_thread_event_statement
+    group: threads
     weight: 2
-    description: "Natural-language event statement without trigger word → note_create intent"
+    description: "Natural-language event statement without trigger word → thread_create intent"
     steps:
       - phone: "+18005550003"
         send: "今天和王医生复诊，血压恢复正常，三个月后复查"
         expect_contains: "#"
 
-  - name: add_note_event_english
-    group: notes
+  - name: add_thread_event_english
+    group: threads
     weight: 1
-    description: "English natural-language event statement → note_create intent"
+    description: "English natural-language event statement → thread_create intent"
     steps:
       - phone: "+18005550003"
         send: "met the architect today about the kitchen renovation — he quoted $8k"
         expect_contains: "#"
 
   # ── /note bot commands ─────────────────────────────────────────
-  - name: add_note_slash_cmd
-    group: notes
+  - name: add_thread_slash_cmd
+    group: threads
     weight: 2
-    description: "Explicit /note <content> bot command"
+    description: "Explicit /thread <content> bot command"
     steps:
       - phone: "+18005550003"
-        send: "/note 参加了Q2规划会议，重点目标是用户增长30%"
-        expect_contains: "note"
+        send: "/thread 参加了Q2规划会议，重点目标是用户增长30%"
+        expect_contains: "thread"
 
-  - name: note_slash_list_n
-    group: notes
+  - name: thread_slash_list_n
+    group: threads
     weight: 1
-    description: "/note list N — list last N notes via bot command"
+    description: "/thread list N — list last N threads via bot command"
     steps:
       - phone: "+18005550003"
-        send: "/note list 3"
+        send: "/thread list 3"
 
-  - name: note_slash_get
-    group: notes
+  - name: thread_slash_get
+    group: threads
     weight: 1
-    description: "/note get #<id> — view note detail by short_id"
+    description: "/thread get #<id> — view thread detail by short_id"
     steps:
       - phone: "+18005550003"
-        send: "/note get #1"
+        send: "/thread get #1"
 
-  - name: note_slash_delete_confirm
-    group: notes
+  - name: thread_slash_delete_confirm
+    group: threads
     weight: 1
-    description: "/note delete #<id> then confirm Y — two-turn deletion flow"
+    description: "/thread delete #<id> then confirm Y — two-turn deletion flow"
     steps:
       - phone: "+18005550003"
-        send: "/note delete #1"
+        send: "/thread delete #1"
       - phone: "+18005550003"
         send: "Y"
 
   # ── /find command ──────────────────────────────────────────────
-  - name: note_find_slash_chinese
-    group: notes
+  - name: thread_find_slash_chinese
+    group: threads
     weight: 2
     description: "/find <query> — explicit search command in Chinese"
     steps:
       - phone: "+18005550003"
         send: "/find 医生"
 
-  - name: note_find_slash_english
-    group: notes
+  - name: thread_find_slash_english
+    group: threads
     weight: 1
     description: "/find <query> — explicit search command in English"
     steps:
       - phone: "+18005550003"
         send: "/find renovation"
 
-  - name: note_question_search
-    group: notes
+  - name: thread_question_search
+    group: threads
     weight: 1
-    description: "Natural-language question → question intent → note search"
+    description: "Natural-language question → question intent → thread search"
     steps:
       - phone: "+18005550003"
         send: "上次我去看医生是什么时候？"
 
   # ── /link commands ─────────────────────────────────────────────
-  - name: note_link_cmd
-    group: notes
+  - name: thread_link_cmd
+    group: threads
     weight: 1
-    description: "/link #<id_A> #<id_B> — manually link two notes"
+    description: "/link #<id_A> #<id_B> — manually link two threads"
     steps:
       - phone: "+18005550003"
         send: "/link #1 #2"
 
-  - name: note_unlink_cmd
-    group: notes
+  - name: thread_unlink_cmd
+    group: threads
     weight: 1
-    description: "/unlink #<id_A> #<id_B> — remove link between two notes"
+    description: "/unlink #<id_A> #<id_B> — remove link between two threads"
     steps:
       - phone: "+18005550003"
         send: "/unlink #1 #2"
 
-  - name: note_links_view_cmd
-    group: notes
+  - name: thread_links_view_cmd
+    group: threads
     weight: 1
-    description: "/note links #<id> — view all links for a note"
+    description: "/thread links #<id> — view all links for a thread"
     steps:
       - phone: "+18005550003"
-        send: "/note links #1"
+        send: "/thread links #1"
 
 
   # ── Entity correlation tests ───────────────────────────────────
-  - name: note_entity_correlation_health
-    group: notes
+  - name: thread_entity_correlation_health
+    group: threads
     weight: 2
-    description: "Two sequential notes about same doctor — second reply shows history"
+    description: "Two sequential threads about same doctor — second reply shows history"
     steps:
       - phone: "+18005550003"
         send: "今天和王医生复诊，血压恢复正常，三个月后复查"
@@ -444,10 +475,10 @@ scenarios:
         send: "note: 王医生说要继续监测血压，每周测量两次"
         expect_contains: "#"
 
-  - name: note_entity_correlation_work
-    group: notes
+  - name: thread_entity_correlation_work
+    group: threads
     weight: 1
-    description: "Two notes about same project/person — second should surface history"
+    description: "Two threads about same project/person — second should surface history"
     steps:
       - phone: "+18005550003"
         send: "met the architect today about the kitchen renovation — he quoted $8k"
@@ -457,22 +488,22 @@ scenarios:
         send: "note: architect called back, can start renovation next month"
         expect_contains: "#"
 
-  - name: note_save_then_get
-    group: notes
+  - name: thread_save_then_get
+    group: threads
     weight: 2
-    description: "Save a note then retrieve it by short_id"
+    description: "Save a thread then retrieve it by short_id"
     steps:
       - phone: "+18005550003"
         send: "记一下：明天要交水电费，金额是$85"
         expect_contains: "#"
       - phone: "+18005550003"
         pause: 2.0
-        send: "/note list 3"
+        send: "/thread list 3"
 
-  - name: note_save_then_find
-    group: notes
+  - name: thread_save_then_find
+    group: threads
     weight: 2
-    description: "Save a note then search for it"
+    description: "Save a thread then search for it"
     steps:
       - phone: "+18005550003"
         send: "jot dentist appointment scheduled for June 15th at 3pm"
@@ -480,6 +511,23 @@ scenarios:
       - phone: "+18005550003"
         pause: 2.0
         send: "/find dentist"
+
+  - name: thread_delete_natural
+    group: threads
+    weight: 2
+    description: "Save a thread then delete it by title with confirmation"
+    steps:
+      - phone: "+18005550003"
+        send: "thread: deletion_smoke_test_{{run_id}}"
+        expect_contains: "#"
+      - phone: "+18005550003"
+        pause: 1.0
+        send: "delete thread deletion_smoke_test_{{run_id}}"
+        expect_contains: "Delete"
+      - phone: "+18005550003"
+        pause: 1.0
+        send: "yes"
+        expect_contains: "deleted"
 
 
   # ── GROUP: chat ───────────────────────────────────────────────
@@ -548,7 +596,7 @@ scenarios:
   - name: expense_then_note_followup
     group: chat
     weight: 1
-    description: "Record expense then jot a follow-up note"
+    description: "Record expense then jot a follow-up thread"
     steps:
       - phone: "+18005550004"
         send: "spent $250 on car repair"
@@ -561,11 +609,11 @@ scenarios:
   - name: multi_intent_session
     group: chat
     weight: 1
-    description: "Reminder then note in same session — tests session isolation"
+    description: "Trigger thread then thread in same session — tests session isolation"
     steps:
       - phone: "+18005550004"
         send: "remind me to call the bank tomorrow at 10am"
-        expect_contains: "reminder"
+        expect_contains: "#"
       - phone: "+18005550004"
         pause: 3.0
         send: "note: bank account might have overdraft fee, check statement"
@@ -574,6 +622,18 @@ scenarios:
 
   # ── GROUP: errors ──────────────────────────────────────────────
   # Eve (+18005550005) tests fault tolerance, edge cases, and malformed input
+  # Eve NEVER creates triggers, so her phone is guaranteed to have no awaiting threads.
+
+  - name: trigger_snooze_no_awaiting
+    group: errors
+    weight: 1
+    description: "Snooze with no awaiting thread — graceful error, not a crash (Eve has no triggers)"
+    # Eve's phone never creates triggers, so ack_status=awaiting is impossible for her.
+    # This makes the 'No reminder' assertion deterministic regardless of Trigger Monitor timing.
+    steps:
+      - phone: "+18005550005"
+        send: "snooze 30 minutes"
+        expect_contains: "No reminder"
 
   - name: gibberish
     group: errors
@@ -659,10 +719,10 @@ scenarios:
       - phone: "+18005550005"
         send: "花了 $50 على الغداء"
 
-  - name: search_notes_no_query
+  - name: search_threads_no_query
     group: errors
     weight: 1
-    description: "Search notes with no search term — should ask or return none"
+    description: "Search threads with no search term — should ask or return none"
     steps:
       - phone: "+18005550005"
         send: "find note"
@@ -689,31 +749,31 @@ scenarios:
       - phone: "+18005550005"
         send: "账户余额"
 
-  - name: note_get_nonexistent
+  - name: thread_get_nonexistent
     group: errors
     weight: 1
-    description: "/note get with non-existent short_id — graceful not-found response"
+    description: "/thread get with non-existent short_id — graceful not-found response"
     steps:
       - phone: "+18005550005"
-        send: "/note get #99999"
+        send: "/thread get #99999"
 
-  - name: note_link_same_id
+  - name: thread_link_same_id
     group: errors
     weight: 1
-    description: "/link a note to itself — should be rejected (schema CHECK constraint)"
+    description: "/link a thread to itself — should be rejected (schema CHECK constraint)"
     steps:
       - phone: "+18005550005"
         send: "/link #1 #1"
 
-  - name: note_delete_nonexistent
+  - name: thread_delete_nonexistent
     group: errors
     weight: 1
-    description: "/note delete with non-existent short_id — graceful not-found"
+    description: "/thread delete with non-existent short_id — graceful not-found"
     steps:
       - phone: "+18005550005"
-        send: "/note delete #99999"
+        send: "/thread delete #99999"
 
-  - name: note_find_empty_query
+  - name: thread_find_empty_query
     group: errors
     weight: 1
     description: "/find with no search term — should ask for a query, not crash"

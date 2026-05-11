@@ -1,10 +1,10 @@
 import { useState, useMemo } from "react";
-import type { Note } from "../../lib/types/nudge";
-import { deleteNote } from "../../lib/api/nudge";
+import type { Thread, AckStatus } from "../../lib/types/nudge";
+import { deleteThread } from "../../lib/api/nudge";
 
 const TZ = "America/Los_Angeles";
 
-function formatNoteDate(iso: string): string {
+function formatThreadDate(iso: string): string {
   try {
     return new Intl.DateTimeFormat("en-US", {
       month: "numeric",
@@ -19,14 +19,44 @@ function formatNoteDate(iso: string): string {
   }
 }
 
-function NoteRow({ note, onRefresh }: { note: Note; onRefresh: () => void }) {
+function formatFireAt(iso: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZone: TZ,
+    }).format(new Date(iso));
+  } catch {
+    return iso;
+  }
+}
+
+const ACK_BADGE: Record<AckStatus, { label: string; bg: string; color: string }> = {
+  pending:      { label: "Pending",      bg: "#eff6ff", color: "#3b82f6" },
+  firing:       { label: "Firing…",      bg: "#fef3c7", color: "#d97706" },
+  awaiting:     { label: "Awaiting ack", bg: "#fefce8", color: "#ca8a04" },
+  acknowledged: { label: "Done",         bg: "#f0fdf4", color: "#16a34a" },
+  snoozed:      { label: "Snoozed",      bg: "#faf5ff", color: "#9333ea" },
+  dismissed:    { label: "Dismissed",    bg: "#f9fafb", color: "#6b7280" },
+  expired:      { label: "Expired",      bg: "#fef2f2", color: "#dc2626" },
+};
+
+const TRIGGER_ICON: Record<string, string> = {
+  once:      "🕐",
+  recurring: "🔁",
+  geofence:  "📍",
+};
+
+function ThreadRow({ thread, onRefresh }: { thread: Thread; onRefresh: () => void }) {
   const [busy, setBusy] = useState(false);
 
   async function handleDelete() {
-    if (!confirm("Delete this note?")) return;
+    if (!confirm("Delete this thread?")) return;
     setBusy(true);
     try {
-      await deleteNote(note.id);
+      await deleteThread(thread.id);
       onRefresh();
     } catch (e) {
       alert(e instanceof Error ? e.message : "Failed to delete");
@@ -36,24 +66,40 @@ function NoteRow({ note, onRefresh }: { note: Note; onRefresh: () => void }) {
   }
 
   const allEntities = [
-    ...(note.entities?.people ?? []),
-    ...(note.entities?.places ?? []),
-    ...(note.entities?.orgs ?? []),
+    ...(thread.entities?.people ?? []),
+    ...(thread.entities?.places ?? []),
+    ...(thread.entities?.orgs ?? []),
   ];
+
+  const trigger = thread.trigger;
+  const hasTrigger = trigger && trigger.type !== "none";
+  const triggerIcon = hasTrigger ? (TRIGGER_ICON[trigger.type] ?? "🔔") : null;
+  const ackBadge = hasTrigger ? (ACK_BADGE[trigger.ack_status] ?? ACK_BADGE.pending) : null;
 
   return (
     <li style={styles.item}>
       <div style={styles.header}>
         <div style={styles.headerLeft}>
-          {note.shortId != null && (
-            <span style={styles.shortId}>#{note.shortId}</span>
+          {triggerIcon && (
+            <span style={{ fontSize: 14 }}>{triggerIcon}</span>
           )}
-          {note.title && (
-            <span style={styles.title}>{note.title}</span>
+          {thread.shortId != null && (
+            <span style={styles.shortId}>#{thread.shortId}</span>
+          )}
+          {thread.title && (
+            <span style={styles.title}>{thread.title}</span>
           )}
         </div>
         <div style={styles.headerRight}>
-          <span style={styles.date}>{formatNoteDate(note.createdAt)}</span>
+          {ackBadge && (
+            <span style={{
+              fontSize: 11, fontWeight: 500, padding: "2px 9px", borderRadius: 99,
+              background: ackBadge.bg, color: ackBadge.color, whiteSpace: "nowrap",
+            }}>
+              {ackBadge.label}
+            </span>
+          )}
+          <span style={styles.date}>{formatThreadDate(thread.createdAt)}</span>
           <button
             onClick={handleDelete}
             disabled={busy}
@@ -65,7 +111,16 @@ function NoteRow({ note, onRefresh }: { note: Note; onRefresh: () => void }) {
         </div>
       </div>
 
-      <p style={styles.content}>{note.content}</p>
+      <p style={styles.content}>{thread.content}</p>
+
+      {hasTrigger && trigger?.fire_at && (
+        <div style={{ fontSize: 12, color: "#6b7280" }}>
+          {triggerIcon} {formatFireAt(trigger.fire_at)}
+          {trigger.type === "recurring" && trigger.cron && (
+            <span style={{ marginLeft: 6, color: "#9ca3af" }}>· recurring</span>
+          )}
+        </div>
+      )}
 
       {allEntities.length > 0 && (
         <div style={styles.pills}>
@@ -75,18 +130,18 @@ function NoteRow({ note, onRefresh }: { note: Note; onRefresh: () => void }) {
         </div>
       )}
 
-      {note.relatedIds && note.relatedIds.length > 0 && (
+      {thread.relatedIds && thread.relatedIds.length > 0 && (
         <div style={styles.related}>
           <span style={styles.relatedLabel}>Related:</span>
-          {note.relatedIds.map((id) => (
+          {thread.relatedIds.map((id) => (
             <span key={id} style={styles.relatedBadge}>#{id}</span>
           ))}
         </div>
       )}
 
-      {note.tags && note.tags.length > 0 && (
+      {thread.tags && thread.tags.length > 0 && (
         <div style={styles.tags}>
-          {note.tags.map((t) => (
+          {thread.tags.map((t) => (
             <span key={t} style={styles.tag}>{t}</span>
           ))}
         </div>
@@ -96,17 +151,17 @@ function NoteRow({ note, onRefresh }: { note: Note; onRefresh: () => void }) {
 }
 
 interface Props {
-  notes: Note[];
+  threads: Thread[];
   onRefresh: () => void;
 }
 
-export function NoteList({ notes, onRefresh }: Props) {
+export function ThreadList({ threads, onRefresh }: Props) {
   const [search, setSearch] = useState("");
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return notes;
-    return notes.filter(
+    if (!q) return threads;
+    return threads.filter(
       (n) =>
         n.content.toLowerCase().includes(q) ||
         (n.title ?? "").toLowerCase().includes(q) ||
@@ -114,15 +169,15 @@ export function NoteList({ notes, onRefresh }: Props) {
         (n.entities?.places ?? []).some((e) => e.toLowerCase().includes(q)) ||
         (n.entities?.orgs ?? []).some((e) => e.toLowerCase().includes(q))
     );
-  }, [notes, search]);
+  }, [threads, search]);
 
-  if (notes.length === 0) {
+  if (threads.length === 0) {
     return (
       <div style={styles.empty}>
-        <p style={{ margin: 0 }}>No notes yet.</p>
+        <p style={{ margin: 0 }}>No threads yet.</p>
         <p style={{ margin: "6px 0 0", fontSize: 12, color: "#9ca3af" }}>
-          Send Alfred a WhatsApp message like "note bought blood pressure pills"
-          to save a note.
+          Send Alfred a WhatsApp message like "thread: bought blood pressure pills"
+          to save a thread.
         </p>
       </div>
     );
@@ -133,7 +188,7 @@ export function NoteList({ notes, onRefresh }: Props) {
       <div style={styles.searchBar}>
         <input
           type="text"
-          placeholder="Search notes…"
+          placeholder="Search threads…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           style={styles.searchInput}
@@ -148,13 +203,13 @@ export function NoteList({ notes, onRefresh }: Props) {
       {filtered.length === 0 ? (
         <div style={styles.empty}>
           <p style={{ margin: 0, color: "#6b7280" }}>
-            No notes match &ldquo;{search}&rdquo;
+            No threads match &ldquo;{search}&rdquo;
           </p>
         </div>
       ) : (
         <ul style={styles.list}>
           {filtered.map((n) => (
-            <NoteRow key={n.id} note={n} onRefresh={onRefresh} />
+            <ThreadRow key={n.id} thread={n} onRefresh={onRefresh} />
           ))}
         </ul>
       )}

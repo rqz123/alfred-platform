@@ -461,30 +461,89 @@ def bind_phone(
             (normalized, user_id, family_id),
         )
 
-    # Send a welcome message via Gateway (best-effort, don't fail the bind if push fails)
-    _send_welcome(normalized)
+    # Send onboarding messages via Gateway (best-effort)
+    _start_onboarding(normalized, family_id)
+    # Initialize PersonaProfile in Brain (best-effort)
+    _init_persona(normalized, family_id)
 
 
-def _send_welcome(phone: str) -> None:
+_ONBOARDING_T0 = (
+    "👋 Hi! I'm Alfred, your personal memory assistant.\n\n"
+    "Your WhatsApp is now linked. Here's what I can do:\n"
+    "• Remember anything: \"Thread: bought blood pressure pills\"\n"
+    "• Set reminders: \"Remind me of dentist tomorrow at 3pm\"\n"
+    "• Track spending: \"Spent $45 on groceries\"\n\n"
+    "I'll learn your patterns and connect the dots over time. Let's start!"
+)
+
+_ONBOARDING_T1H = (
+    "🌱 One quick tip: start a thread about something on your mind right now.\n"
+    "Just say \"Thread:\" followed by anything — a thought, a task, a concern.\n\n"
+    "Example: \"Thread: need to renew car insurance before June\""
+)
+
+_ONBOARDING_T8H = (
+    "✨ Here's something cool Alfred does: it finds connections between your threads and spending.\n\n"
+    "For example, if you note \"car maintenance is getting expensive\" and log a repair expense, "
+    "Alfred will notice the link and surface it for you.\n\n"
+    "These are called *Weavings* — visible in the web app at the Knowledge Graph."
+)
+
+_ONBOARDING_T24H = (
+    "📈 You're off to a great start!\n\n"
+    "A few things to explore:\n"
+    "• Web dashboard → Nudge tab to see your threads\n"
+    "• Knowledge Graph → Brain tab to see connections\n"
+    "• Say \"remind me [anything]\" for smart reminders\n\n"
+    "Alfred works best when you keep talking to it. See you around! 🤝"
+)
+
+
+def _push_message(phone: str, message: str) -> None:
     gateway_url = os.environ.get("GATEWAY_URL", "http://localhost:8000")
     api_key = os.environ.get("OURCENTS_API_KEY", "")
-    welcome = (
-        "👋 Welcome to Alfred! Your WhatsApp number is now linked.\n\n"
-        "You can send me messages like:\n"
-        "• \"Spent $12 on lunch\"\n"
-        "• \"Income $500 freelance\"\n"
-        "• \"What's my balance?\"\n"
-        "• \"Remind me to pay rent on the 1st\""
-    )
     try:
         with httpx.Client(timeout=8.0) as client:
             client.post(
                 f"{gateway_url}/api/internal/push",
-                json={"user_phone": phone, "message": welcome, "source_service": "ourcents"},
+                json={"user_phone": phone, "message": message, "source_service": "ourcents"},
                 headers={"X-Alfred-API-Key": api_key},
             )
     except Exception as exc:
-        logger.warning("Welcome push failed for %s: %s", phone, exc)
+        logger.warning("Onboarding push failed for %s: %s", phone, exc)
+
+
+def _start_onboarding(phone: str, family_id: str | None) -> None:
+    import threading
+
+    _push_message(phone, _ONBOARDING_T0)
+
+    def _delayed(delay_secs: float, message: str) -> None:
+        threading.Timer(delay_secs, _push_message, args=[phone, message]).start()
+
+    _delayed(3600, _ONBOARDING_T1H)        # T+1h
+    _delayed(8 * 3600, _ONBOARDING_T8H)   # T+8h
+    _delayed(24 * 3600, _ONBOARDING_T24H)  # T+24h
+
+
+def _send_welcome(phone: str) -> None:
+    _push_message(phone, _ONBOARDING_T0)
+
+
+def _init_persona(phone: str, family_id: str | None) -> None:
+    if not family_id:
+        return
+    brain_url = os.environ.get("BRAIN_URL", "http://localhost:8003")
+    brain_key = os.environ.get("ALFRED_INTERNAL_KEY", "")
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            client.post(
+                f"{brain_url}/api/brain/personas",
+                json={"user_phone": phone, "family_id": family_id},
+                headers={"X-Alfred-API-Key": brain_key},
+            )
+    except Exception as exc:
+        logger.warning("Persona init failed for %s: %s", phone, exc)
 
 
 @router.delete("/phone/bindings/{phone}", status_code=status.HTTP_204_NO_CONTENT)
@@ -753,9 +812,16 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
                     (user_id, "create", "receipt", receipt_id,
                      f"WA +{normalized}: {amount:.2f}"),
                 )
+            merchant_name = f"WA +{normalized}"
             return AlfredExecuteResponse(
                 request_id=req.request_id, status="success",
                 message=f"Expense recorded: {_fmt_amount(float(amount), currency)} ({purchase_date}, {category_val})",
+                data={
+                    "expense_id": str(receipt_id),
+                    "merchant_name": merchant_name,
+                    "amount": float(amount),
+                    "category": category_val,
+                },
             )
         except Exception:
             return AlfredExecuteResponse(
@@ -903,6 +969,13 @@ async def alfred_execute(req: AlfredExecuteRequest, db=Depends(get_db), file_sto
         return AlfredExecuteResponse(
             request_id=req.request_id, status="success",
             message=msg_text,
+            data={
+                "expense_id": str(receipt_id) if receipt_id is not None else None,
+                "merchant_name": merchant,
+                "amount": float(amount) if amount else None,
+                "category": category,
+                "currency": extraction.get("currency"),
+            },
         )
 
     return AlfredExecuteResponse(

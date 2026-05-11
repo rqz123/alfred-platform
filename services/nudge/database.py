@@ -13,8 +13,8 @@ engine = create_engine(
 
 metadata = MetaData()
 
-notes = Table(
-    "notes",
+threads = Table(
+    "threads",
     metadata,
     Column("id", String, primary_key=True),
     Column("shortId", Integer, nullable=True),    # user-scoped auto-increment, e.g. 42
@@ -28,12 +28,12 @@ notes = Table(
     Column("updatedAt", String, nullable=False),
 )
 
-note_links = Table(
-    "note_links",
+thread_links = Table(
+    "thread_links",
     metadata,
     Column("id", String, primary_key=True),
-    Column("note_id", String, nullable=False),
-    Column("linked_note_id", String, nullable=False),
+    Column("thread_id", String, nullable=False),
+    Column("linked_thread_id", String, nullable=False),
     Column("created_by", String, nullable=True),   # phone
     Column("createdAt", String, nullable=False),
 )
@@ -63,21 +63,41 @@ reminders = Table(
 
 
 def create_tables():
-    metadata.create_all(engine)
-    # Migrate: add pushRetries if it doesn't exist yet
     from sqlalchemy import text
     with engine.connect() as conn:
+        # Migrate: rename notes → threads, note_links → thread_links
+        tables = [row[0] for row in conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))]
+        if "notes" in tables and "threads" not in tables:
+            conn.execute(text("ALTER TABLE notes RENAME TO threads"))
+            conn.commit()
+        if "note_links" in tables and "thread_links" not in tables:
+            conn.execute(text("ALTER TABLE note_links RENAME TO thread_links"))
+            conn.commit()
+
+    metadata.create_all(engine)
+
+    with engine.connect() as conn:
         try:
-            # Migrate notes table
-            note_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(notes)"))]
-            if "shortId" not in note_cols:
-                conn.execute(text('ALTER TABLE notes ADD COLUMN "shortId" INTEGER'))
+            thread_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(threads)"))]
+            if "shortId" not in thread_cols:
+                conn.execute(text('ALTER TABLE threads ADD COLUMN "shortId" INTEGER'))
                 conn.commit()
-            if "title" not in note_cols:
-                conn.execute(text('ALTER TABLE notes ADD COLUMN "title" VARCHAR'))
+            if "title" not in thread_cols:
+                conn.execute(text('ALTER TABLE threads ADD COLUMN "title" VARCHAR'))
                 conn.commit()
-            if "entities" not in note_cols:
-                conn.execute(text('ALTER TABLE notes ADD COLUMN "entities" TEXT'))
+            if "entities" not in thread_cols:
+                conn.execute(text('ALTER TABLE threads ADD COLUMN "entities" TEXT'))
+                conn.commit()
+        except Exception:
+            pass
+        try:
+            # Rename legacy note_id/linked_note_id columns in thread_links
+            link_cols = [row[1] for row in conn.execute(text("PRAGMA table_info(thread_links)"))]
+            if "note_id" in link_cols and "thread_id" not in link_cols:
+                conn.execute(text("ALTER TABLE thread_links RENAME COLUMN note_id TO thread_id"))
+                conn.commit()
+            if "linked_note_id" in link_cols and "linked_thread_id" not in link_cols:
+                conn.execute(text("ALTER TABLE thread_links RENAME COLUMN linked_note_id TO linked_thread_id"))
                 conn.commit()
         except Exception:
             pass

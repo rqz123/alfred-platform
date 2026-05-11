@@ -12,6 +12,7 @@ source "$REPO/.env"
 GW="${GATEWAY_PORT:-8000}"
 OC="${OURCENTS_PORT:-8001}"
 NU="${NUDGE_PORT:-8002}"
+BN="${BRAIN_PORT:-8003}"
 BR="${BRIDGE_PORT:-3001}"
 
 check() {
@@ -27,7 +28,8 @@ echo "Alfred Platform — Service Status"
 echo ""
 check "gateway " "$GW" "http://127.0.0.1:${GW}/health"
 check "ourcents" "$OC" "http://127.0.0.1:${OC}/api/ourcents/health"
-check "nudge   " "$NU" "http://127.0.0.1:${NU}/api/nudge/health"
+check "thread  " "$NU" "http://127.0.0.1:${NU}/api/thread/health"
+check "brain   " "$BN" "http://127.0.0.1:${BN}/api/brain/health"
 check "bridge  " "$BR" "http://127.0.0.1:${BR}/health"
 
 # wa-sim daemon
@@ -46,4 +48,4 @@ fi
 echo ""
 echo "Ports (from .env):"
 echo "  GATEWAY_PORT=${GW}  OURCENTS_PORT=${OC}  NUDGE_PORT=${NU}  BRIDGE_PORT=${BR}"
-echo "  BRIDGE_API_URL=${BRIDGE_API_URL:-not set}"
+echo "  BRAIN_PORT=${BN}  BRIDGE_API_URL=${BRIDGE_API_URL:-not set}"
