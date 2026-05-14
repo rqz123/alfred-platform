@@ -1,7 +1,7 @@
 from sqlmodel import Session, SQLModel, create_engine, text
 
 from app.core.config import get_settings
-from app.models.account import AlfredFamily, AlfredUser  # noqa: F401 — registers tables
+from app.models.account import AlfredFamily, AlfredUser, InviteToken  # noqa: F401 — registers tables
 from app.models.auth import AdminUser
 from app.models.chat import Contact, Conversation, Message
 
@@ -18,12 +18,18 @@ def init_db() -> None:
 
 def _migrate() -> None:
     """Apply additive schema migrations for columns added after initial create."""
+    migrations = [
+        "ALTER TABLE conversation ADD COLUMN unread_count INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE alfred_users ADD COLUMN invited_by TEXT",
+        "ALTER TABLE alfred_users ADD COLUMN joined_at DATETIME",
+    ]
     with Session(engine) as session:
-        try:
-            session.exec(text("ALTER TABLE conversation ADD COLUMN unread_count INTEGER NOT NULL DEFAULT 0"))
-            session.commit()
-        except Exception:
-            session.rollback()  # column already exists — safe to ignore
+        for ddl in migrations:
+            try:
+                session.exec(text(ddl))
+                session.commit()
+            except Exception:
+                session.rollback()  # column already exists — safe to ignore
 
 
 def get_session():

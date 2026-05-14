@@ -30,6 +30,7 @@ def check_for_weavings(
     thread_id: str,
     thread_embedding: list[float],
     intent_vector: dict,
+    acl_tier: str = "shared",
 ) -> list[str]:
     """
     Search for OurCents expenses semantically similar to the new thread.
@@ -90,6 +91,7 @@ def check_for_weavings(
                     intent_vector_json=json.dumps(intent_vector),
                     fact_cosine=fact_cosine,
                     status="proposed",
+                    acl_tier=acl_tier,
                     created_at=now,
                 ))
                 conn.commit()

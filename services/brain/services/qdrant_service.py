@@ -98,7 +98,14 @@ def ensure_collections() -> None:
                 client.create_payload_index(name, "lock_status", PayloadSchemaType.KEYWORD)
                 if name == "threads_all":
                     client.create_payload_index(name, "category", PayloadSchemaType.KEYWORD)
+                    client.create_payload_index(name, "acl_tier", PayloadSchemaType.KEYWORD)
                 logger.info("Created Qdrant collection: %s", name)
+        # Ensure acl_tier index exists on threads_all for existing deployments
+        try:
+            if "threads_all" in {c.name for c in client.get_collections().collections}:
+                client.create_payload_index("threads_all", "acl_tier", PayloadSchemaType.KEYWORD)
+        except Exception:
+            pass
     except Exception as exc:
         logger.error("Qdrant ensure_collections failed: %s", exc)
 
@@ -154,6 +161,48 @@ def upsert_expense(
         )
     except Exception as exc:
         logger.error("upsert_expense failed for %s: %s", expense_id, exc)
+
+
+def find_similar_threads(
+    family_id: str,
+    thread_embedding: list[float],
+    top_k: int = 50,
+    exclude_thread_id: str | None = None,
+    cross_user: bool = True,
+) -> list[Any]:
+    """Return similar threads from threads_all for Weaving detection.
+
+    cross_user=True excludes user_private threads so private content is never
+    exposed across users (Patch F intersection rule prerequisite).
+    """
+    if not get_settings().qdrant_enabled:
+        return []
+    from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchExcept
+    try:
+        client = _get_client()
+        must_conditions = [
+            FieldCondition(key="family_id", match=MatchValue(value=family_id)),
+            FieldCondition(key="lock_status", match=MatchValue(value="ready")),
+        ]
+        if cross_user:
+            must_conditions.append(
+                FieldCondition(key="acl_tier", match=MatchExcept(**{"except": ["user_private"]}))
+            )
+        result = client.query_points(
+            "threads_all",
+            query=thread_embedding,
+            query_filter=Filter(must=must_conditions),
+            limit=top_k,
+            with_payload=True,
+        )
+        points = result.points
+        if exclude_thread_id:
+            exclude_uuid = _stable_uuid(exclude_thread_id)
+            points = [p for p in points if str(p.id) != exclude_uuid]
+        return points
+    except Exception as exc:
+        logger.error("find_similar_threads failed: %s", exc)
+        return []
 
 
 def find_similar_expenses(

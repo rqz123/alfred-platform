@@ -26,9 +26,11 @@ async function resolveFamilyId(): Promise<string> {
   // Fallback: fetch first family from gateway
   const base = `${window.location.protocol}//${window.location.hostname}:8000`;
   const token = localStorage.getItem("alfred_token");
-  const res = await fetch(`${base}/api/alfred/families`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  });
+  const phone = localStorage.getItem("alfred_admin_phone");
+  const headers: Record<string, string> = {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  if (phone) headers["X-Alfred-Phone"] = phone;
+  const res = await fetch(`${base}/api/alfred/families`, { headers });
   if (res.ok) {
     const families = await res.json() as Array<{ id: string }>;
     if (families.length > 0) return families[0].id;

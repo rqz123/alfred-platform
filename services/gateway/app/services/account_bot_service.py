@@ -12,6 +12,10 @@ Commands (admin only):
   /family remove +phone
   /list families
   /status
+  邀请 [姓名]  /  invite [name]   (generates invite card with token)
+
+Token activation (any registered WhatsApp number):
+  Any message containing (Token:ALFRED-XXXXXX) triggers user binding.
 
 Called by dispatch_service before intent detection for every text message.
 Returns a reply string if the message was handled, else None.
@@ -19,6 +23,8 @@ Returns a reply string if the message was handled, else None.
 
 import os
 import re
+import secrets
+import string
 from typing import Optional
 from uuid import uuid4
 from datetime import datetime, timezone
@@ -32,6 +38,16 @@ import threading
 
 # phone → {"action": str, ...}
 _pending_confirmations: dict[str, dict] = {}
+
+_TOKEN_PATTERN = re.compile(r'\(Token:([A-Z0-9\-]+)\)')
+_INVITE_PATTERN = re.compile(r'^(?:邀请|invite)\s+(.+)$', re.IGNORECASE)
+_MAX_PENDING_TOKENS = 5
+
+
+def _generate_token_id() -> str:
+    alphabet = string.ascii_uppercase + string.digits
+    suffix = ''.join(secrets.choice(alphabet) for _ in range(6))
+    return f"ALFRED-{suffix}"
 
 
 def _init_persona(user_phone: str, family_id: str, display_name: str | None = None) -> None:
@@ -54,6 +70,143 @@ def _init_persona(user_phone: str, family_id: str, display_name: str | None = No
             pass
 
     threading.Thread(target=_post, daemon=True).start()
+
+def _render_invite_card(
+    admin_name: str,
+    token_id: str,
+    bot_number: str,
+    expires_at_date: str,
+) -> str:
+    from urllib.parse import quote
+    admin_encoded = quote(admin_name)
+    token_text = f"Hi Alfred, joining {admin_name}'s family. (Token:{token_id})"
+    wa_link = f"https://wa.me/{bot_number.lstrip('+')}?text={quote(token_text)}"
+    return (
+        f"🛡️ Alfred Family Invite\n\n"
+        f"{admin_name} is inviting you to join their family on Alfred.\n\n"
+        f"Your personal entry link 👇\n{wa_link}\n\n"
+        f"Or send Alfred this message:\n"
+        f"「{token_text}」\n\n"
+        f"Valid for 7 days (until {expires_at_date})\n\n"
+        f"📌 Note: Alfred does not store your private information. "
+        f"You can disconnect anytime — {admin_name} won't be notified."
+    )
+
+
+def activate_invite(session: Session, sender_phone: str, token_id: str) -> Optional[str]:
+    """
+    Complete user binding from a Token message. Returns a reply or None on error.
+    Called from dispatch_service token parser before normal routing.
+    """
+    token = repo.get_invite_token(session, token_id)
+    if token is None:
+        return "This invite code doesn't exist. Please ask the admin to generate a new one."
+
+    now = datetime.now(timezone.utc)
+    if token.status == "used":
+        return (
+            "This invite code has already been used. "
+            "If you already joined, just talk to me directly 😊 "
+            "If not, ask the admin for a new invite."
+        )
+    expires_at = token.expires_at if token.expires_at.tzinfo else token.expires_at.replace(tzinfo=timezone.utc)
+    if token.status == "expired" or expires_at < now:
+        if token.status != "expired":
+            token.status = "expired"
+            session.add(token)
+            session.commit()
+        return "This invite code has expired. Please ask the admin to generate a new one."
+
+    # Atomic CAS: mark token as used before creating the user
+    existing_user = repo.get_user_by_phone(session, sender_phone)
+    if existing_user and existing_user.family_id:
+        return "You're already in a family. Talk to me anytime 😊"
+
+    claimed = repo.claim_invite_token(session, token, used_by_user_id=sender_phone)
+    if not claimed:
+        return (
+            "This invite code was just used by someone else. "
+            "Please ask the admin for a new invite code."
+        )
+
+    # Create or update user record
+    if existing_user:
+        user = repo.update_user(
+            session, existing_user,
+            family_id=token.family_id,
+            display_name=existing_user.display_name or token.invitee_name,
+            role="invited_user",
+            invited_by=token.created_by,
+            joined_at=now,
+        )
+    else:
+        user = repo.create_user(
+            session,
+            phone=sender_phone,
+            display_name=token.invitee_name,
+            family_id=token.family_id,
+        )
+        user = repo.update_user(
+            session, user,
+            role="invited_user",
+            invited_by=token.created_by,
+            joined_at=now,
+        )
+
+    # Notify the admin who created the invite
+    admin = repo.get_user_by_id(session, token.created_by)
+
+    # Fire-and-forget: init PersonaProfile in Brain
+    _init_persona(sender_phone, token.family_id, display_name=token.invitee_name)
+
+    # Trigger parameterized Onboarding (deferred so this function returns fast)
+    admin_name = (admin.display_name if admin else None) or "Admin"
+    threading.Thread(
+        target=_run_onboarding_async,
+        args=(sender_phone, token.invitee_name, admin_name, token.weaving_hook_id),
+        daemon=True,
+    ).start()
+
+    # Notify the admin
+    if admin:
+        threading.Thread(
+            target=_notify_admin_async,
+            args=(admin.phone, token.invitee_name),
+            daemon=True,
+        ).start()
+
+    return None  # Onboarding service will send the welcome message
+
+
+def _run_onboarding_async(
+    user_phone: str,
+    user_name: str,
+    admin_name: str,
+    weaving_hook_id: str | None = None,
+) -> None:
+    try:
+        from app.services.onboarding_service import run_onboarding
+        run_onboarding(
+            user_phone=user_phone,
+            user_name=user_name,
+            admin_name=admin_name,
+            weaving_hook_id=weaving_hook_id,
+        )
+    except Exception:
+        pass
+
+
+def _notify_admin_async(admin_phone: str, invitee_name: str) -> None:
+    """Send notification to admin that invitee accepted."""
+    from app.core.config import get_settings
+    from app.services.bridge_service import send_text_via_bridge
+    settings = get_settings()
+    try:
+        if settings.whatsapp_mode == "bridge":
+            send_text_via_bridge(None, admin_phone, f"✅ {invitee_name} has accepted the invite and is being onboarded.")
+    except Exception:
+        pass
+
 
 _ADMIN_PREFIXES = (
     "/add user",
@@ -108,13 +261,29 @@ def _call_thread_sync(phone: str, intent: str, entities: dict) -> str:
 def handle_bot_command(session: Session, phone: str, text: str) -> Optional[str]:
     stripped = text.strip()
 
+    # Token activation — highest priority, checked before anything else.
+    token_match = _TOKEN_PATTERN.search(stripped)
+    if token_match:
+        return activate_invite(session, phone, token_match.group(1))
+
     # Pending confirmation takes priority, but a new slash command cancels it.
     if phone in _pending_confirmations:
-        if stripped.startswith("/"):
+        # Invite command pattern is not a slash command — handle separately
+        if _INVITE_PATTERN.match(stripped):
+            _pending_confirmations.pop(phone)
+        elif stripped.startswith("/"):
             _pending_confirmations.pop(phone)
             # Fall through to handle the new command.
         else:
             return _handle_confirmation(session, phone, stripped)
+
+    # Invite command (natural language, no leading slash)
+    invite_match = _INVITE_PATTERN.match(stripped)
+    if invite_match:
+        user = repo.get_user_by_phone(session, phone)
+        if user and user.role == "admin":
+            return _cmd_invite_user(session, user, invite_match.group(1).strip())
+        return None
 
     if not stripped.startswith("/"):
         return None
@@ -245,6 +414,42 @@ def _handle_confirmation(session: Session, phone: str, text: str) -> str:
 
 
 # ── Commands ───────────────────────────────────────────────────────────────────
+
+def _cmd_invite_user(session: Session, admin, invitee_name: str) -> str:
+    """Generate an invite card for a new user. Admin only."""
+    if not admin.family_id:
+        return "❌ You need to be in a family to invite others. Create one first with /create family."
+
+    if not invitee_name.strip():
+        return "Usage: 邀请 [name]  or  invite [name]"
+
+    pending_count = repo.count_pending_tokens(session, admin.family_id, admin.id)
+    if pending_count >= _MAX_PENDING_TOKENS:
+        return f"❌ You already have {_MAX_PENDING_TOKENS} pending invites. Wait for them to expire or be used."
+
+    from app.core.config import get_settings
+    settings = get_settings()
+    bot_number = settings.bot_phone_number or ""
+
+    token_id = _generate_token_id()
+    from datetime import timedelta
+    expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+    repo.create_invite_token(
+        session,
+        family_id=admin.family_id,
+        created_by=admin.id,
+        invitee_name=invitee_name.strip(),
+        token_id=token_id,
+    )
+
+    expires_date_str = expires_at.strftime("%Y-%m-%d")
+    return _render_invite_card(
+        admin_name=admin.display_name or "Admin",
+        token_id=token_id,
+        bot_number=bot_number,
+        expires_at_date=expires_date_str,
+    )
+
 
 def _cmd_add_user(session: Session, text: str) -> str:
     # /add user +phone [display_name]

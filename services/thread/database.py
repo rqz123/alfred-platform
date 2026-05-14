@@ -39,6 +39,7 @@ threads = Table(
     Column("priority", String, nullable=True),     # high | normal | low
     Column("locationTag", String, nullable=True),
     Column("status", String, nullable=False, default="active"),  # active | sleeping | archived
+    Column("acl", Text, nullable=True),                          # JSON: {tier, created_by, visible_to}
     Column("createdAt", String, nullable=False),
     Column("updatedAt", String, nullable=False),
 )
@@ -170,6 +171,7 @@ def create_tables():
                 ('source',      'ALTER TABLE threads ADD COLUMN "source" TEXT DEFAULT "whatsapp"'),
                 ('priority',    'ALTER TABLE threads ADD COLUMN "priority" TEXT'),
                 ('locationTag', 'ALTER TABLE threads ADD COLUMN "locationTag" TEXT'),
+                ('acl',         'ALTER TABLE threads ADD COLUMN "acl" TEXT'),
             ]
             for col_name, ddl in new_thread_cols:
                 if col_name not in thread_cols:

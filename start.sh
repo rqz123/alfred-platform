@@ -55,13 +55,13 @@ echo ""
 # Bridge (Node.js) — must start with BRIDGE_API_KEY from root .env
 echo "  [1/5] bridge       → http://localhost:${BRIDGE_PORT}"
 cd "$REPO/bridge"
-nohup node src/server.mjs > "$LOG_DIR/bridge.log" 2>&1 &
+setsid node src/server.mjs > "$LOG_DIR/bridge.log" 2>&1 &
 echo $! >> "$PID_FILE"
 
 # Gateway (Python — serves built frontend)
 echo "  [2/5] gateway      → http://localhost:${GATEWAY_PORT}"
 cd "$REPO/services/gateway"
-nohup "$REPO/services/gateway/.venv/bin/uvicorn" app.main:app \
+setsid "$REPO/services/gateway/.venv/bin/uvicorn" app.main:app \
   --host 0.0.0.0 --port "${GATEWAY_PORT}" --reload \
   > "$LOG_DIR/gateway.log" 2>&1 &
 echo $! >> "$PID_FILE"
@@ -69,7 +69,7 @@ echo $! >> "$PID_FILE"
 # OurCents
 echo "  [3/5] ourcents     → http://localhost:${OURCENTS_PORT}"
 cd "$REPO/services/ourcents"
-nohup "$REPO/services/ourcents/.venv/bin/uvicorn" main:app \
+setsid "$REPO/services/ourcents/.venv/bin/uvicorn" main:app \
   --host 0.0.0.0 --port "${OURCENTS_PORT}" --reload \
   > "$LOG_DIR/ourcents.log" 2>&1 &
 echo $! >> "$PID_FILE"
@@ -77,7 +77,7 @@ echo $! >> "$PID_FILE"
 # Thread
 echo "  [4/5] thread       → http://localhost:${THREAD_PORT}"
 cd "$REPO/services/thread"
-nohup "$REPO/services/thread/.venv/bin/uvicorn" main:app \
+setsid "$REPO/services/thread/.venv/bin/uvicorn" main:app \
   --host 0.0.0.0 --port "${THREAD_PORT}" --reload \
   > "$LOG_DIR/thread.log" 2>&1 &
 echo $! >> "$PID_FILE"
@@ -85,7 +85,7 @@ echo $! >> "$PID_FILE"
 # Brain
 echo "  [5/5] brain        → http://localhost:${BRAIN_PORT}"
 cd "$REPO/services/brain"
-nohup "$REPO/services/brain/.venv/bin/uvicorn" main:app \
+setsid "$REPO/services/brain/.venv/bin/uvicorn" main:app \
   --host 0.0.0.0 --port "${BRAIN_PORT}" --reload \
   > "$LOG_DIR/brain.log" 2>&1 &
 echo $! >> "$PID_FILE"

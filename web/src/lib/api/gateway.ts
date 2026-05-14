@@ -135,6 +135,10 @@ export function createConnection(token: string, label?: string) {
   );
 }
 
+export function restartConnection(token: string, connectionId: number) {
+  return apiRequest<WaConnection>(`/connections/${connectionId}/restart`, { method: "POST" }, token);
+}
+
 export function deleteConnection(token: string, connectionId: number) {
   return apiRequest<void>(`/connections/${connectionId}`, { method: "DELETE" }, token);
 }

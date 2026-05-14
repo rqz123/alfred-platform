@@ -106,9 +106,16 @@ def _get_confirmed_weavings(thread_id: str, family_id: str | None) -> list[dict]
 
 def _build_message(thread: dict, context_weavings: list[dict]) -> str:
     content = thread.get("content", "")
-    if not context_weavings:
+    # ACL guard: omit weavings whose related thread is user_private.
+    # Weaving Detector already prevents user_private cross-user weavings at creation
+    # time, but check here as a safety net for legacy data.
+    visible = [
+        w for w in context_weavings
+        if w.get("acl_tier", "shared") != "user_private"
+    ]
+    if not visible:
         return content
-    titles = [w.get("title", "") for w in context_weavings if w.get("title")]
+    titles = [w.get("title", "") for w in visible if w.get("title")]
     if not titles:
         return content
     related = "; ".join(titles[:3])

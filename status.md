@@ -1,46 +1,47 @@
 # Alfred Platform - Shared Dev/Test Status
 
 STATUS: test_passed
-LAST_UPDATED: 2026-05-10 21:59 PDT
-MILESTONE: PRD-v0.9 / M6
+LAST_UPDATED: 2026-05-14 09:35 PDT
+MILESTONE: Settings / Alfred Bot connection UX
 BRANCH: main
-CODEX_TEST_OUTPUT: M6 focused verification passed
 
 ## CURRENT_TASK
-M6 verification complete. Docker intentionally not tested.
+Round 8 clean retest: verify Bot Reconnect is non-destructive and Forget Device is destructive using the updated Bridge process.
 
 ## CLAUDE_DEV_OUTPUT
-M6 changes under test:
-- `services/brain/services/trigger_monitor.py`: fixed NameError by moving `logger.info("Expired thread …")` into `_handle_expiry`.
-- `services/thread/routers/thread.py`: added API-key-authenticated `GET /alfred/threads?user_phone=<phone>` for Brain.
-- `services/brain/services/proactive_nudge.py`: `_get_idle_threads` now calls `/alfred/threads`; `_discover_users` reads from `persona_profiles`.
-- `services/gateway/app/services/account_bot_service.py`: `_cmd_family_add` calls fire-and-forget `_init_persona(...)` to create PersonaProfile rows in Brain.
+Fixed `bridge/src/server.mjs` for Chrome profile recreation race:
+- Added `_deletingSet` guard.
+- Kill Chrome before waiting on in-flight init for destructive delete.
+- Added retry-verified auth profile wipe.
+- DELETE returns failure if profile cannot be cleaned.
 
 ## CODEX_TEST_OUTPUT
-Test mode: local venv services only; Docker skipped.
-Services started for test: Thread 8002 and Brain 8003.
-Services stopped after test; ports 8002 and 8003 are clean.
+Result: PASS after killing a stale orphan Bridge process and restarting the stack cleanly.
 
-Passed:
-- Python compile check passed for the 4 touched files.
-- Brain service started successfully and ran trigger expiry logic without NameError.
-- Expiry logging now executes inside `_handle_expiry`; observed `Expired thread ...` log lines during Brain startup.
-- Thread internal endpoint `GET /api/thread/alfred/threads?user_phone=<phone>`:
-  - Missing key rejected with 401.
-  - Bad key rejected with 401.
-  - Valid `X-Alfred-API-Key` returned 200.
-  - Returned active threads only for the requested `triggerSource`.
-  - Excluded archived threads and other users' threads.
-  - Response fields were limited to `id`, `title`, `content`, `createdAt`, `updatedAt`.
-- Brain proactive nudge:
-  - `_discover_users()` found a test user from `persona_profiles`.
-  - `_get_idle_threads(user_phone)` successfully fetched an old idle thread via the new Thread internal endpoint.
-- Brain persona endpoint used by Gateway `_init_persona`:
-  - Bad key returns 403.
-  - Missing required fields returns 422.
-  - Valid create returns 204.
-  - Repeated create is idempotent; row count remains 1.
+Verified:
+- Gateway syntax check passed for `services/gateway/app/api/routes.py` and `services/gateway/app/services/bridge_service.py`.
+- Bridge syntax check passed for `bridge/src/server.mjs`.
+- Web build passed.
+- Local stack is healthy: Gateway, OurCents, Thread, Brain, Bridge.
+- Actual Bridge listener after clean restart: PID 13766 on port 3001.
 
-Notes:
-- Gateway `_init_persona` was verified statically: `_cmd_family_add` calls it after `repo.update_user(...)`, and `_init_persona` posts to `${BRAIN_URL}/api/brain/personas` with `X-Alfred-API-Key`.
-- No full wa-sim regression was run because M6 touched internal Thread/Brain/Gateway wiring rather than WhatsApp user flows.
+Runtime test:
+- Created a fresh Gateway connection.
+- Inserted a marker file into `.wwebjs_auth/session-855544e9-d59b-427e-b495-16a35701123c`.
+- Called Reconnect/Restart via Gateway.
+- Marker survived restart: PASS.
+- Called Forget Device via Gateway.
+- DELETE returned HTTP 204.
+- Auth dir after delete: absent.
+- Bridge `/sessions`: deleted session not listed.
+- Host process check: zero Chromium processes using that auth profile.
+
+Bridge log confirms the intended new path executed:
+- `Late init error on deleting session — cleaning up`
+- `Session destroyed + auth wiped`
+
+Residual issue found during retest setup:
+- An old orphan Bridge process from the previous run was still listening on port 3001 as PID 4268, while `.logs/bridge.pid` pointed elsewhere.
+- `start.sh` initially reported healthy because it hit that old process, while the new Bridge failed with `EADDRINUSE`.
+- This can make future tests accidentally hit stale code.
+- Recommended follow-up: make `start.sh`/`stop.sh` detect and handle existing listeners on managed ports, or verify that the listening PID matches the PID just started.

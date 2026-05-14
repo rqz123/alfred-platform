@@ -163,7 +163,7 @@ def update_user(
             detail={"code": "USER_NOT_FOUND", "message": f"No user found with phone {phone}"},
         )
 
-    updates = body.model_dump(exclude_none=True)
+    updates = {k: v for k, v in body.model_dump().items() if k in body.model_fields_set}
 
     if "role" in updates:
         new_role = updates["role"]

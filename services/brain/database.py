@@ -1,6 +1,6 @@
 from sqlalchemy import (
     create_engine, MetaData, Table, Column,
-    String, Text, Float, Boolean, Integer,
+    String, Text, Float, Boolean, Integer, text,
 )
 
 from config import get_settings
@@ -38,6 +38,7 @@ weavings = Table(
     Column("intent_vector_json", Text, nullable=True),  # {"urgency":…,"social_bond":…,"goal_alignment":…}
     Column("fact_cosine", Float, nullable=True),
     Column("status", String, nullable=False, default="proposed"),  # proposed | confirmed | corrected
+    Column("acl_tier", String, nullable=False, server_default="shared"),  # shared | family_private | user_private
     Column("created_at", String, nullable=False),
     Column("confirmed_at", String, nullable=True),
 )
@@ -105,3 +106,17 @@ persona_profiles = Table(
 
 def create_tables():
     metadata.create_all(engine)
+    _migrate()
+
+
+def _migrate():
+    migrations = [
+        'ALTER TABLE weavings ADD COLUMN acl_tier TEXT NOT NULL DEFAULT "shared"',
+    ]
+    with engine.connect() as conn:
+        for ddl in migrations:
+            try:
+                conn.execute(text(ddl))
+                conn.commit()
+            except Exception:
+                conn.rollback()  # column already exists — safe to ignore

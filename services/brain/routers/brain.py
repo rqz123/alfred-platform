@@ -166,6 +166,32 @@ def get_graph(family_id: str):
 
 # ── Weaving management ────────────────────────────────────────────────────────
 
+@router.get("/weavings/by_id/{weaving_id}")
+def get_weaving_by_id(
+    weaving_id: str,
+    x_api_key: str = Header(alias="X-API-Key", default=""),
+):
+    """Fetch a single weaving by its ID. Used by onboarding Entry Hook."""
+    _require_api_key(x_api_key)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                select(weavings).where(weavings.c.id == weaving_id)
+            ).mappings().first()
+            if row is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Weaving not found")
+            weaving = dict(row)
+            # Fail closed: only weavings with explicit shared/family_private ACL are eligible as Entry Hooks
+            if weaving.get("acl_tier") not in ("shared", "family_private"):
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Entry Hook not available for this weaving")
+            return weaving
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("get_weaving_by_id failed: %s", exc)
+        raise
+
+
 @router.get("/weavings/{family_id}")
 def list_weavings(family_id: str):
     try:

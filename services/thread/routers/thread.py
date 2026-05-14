@@ -195,6 +195,13 @@ def _build_thread_out(row, all_rows: list, all_links: list) -> ThreadOut:
         [sid for nid in all_related if (sid := id_to_short.get(nid)) is not None]
     )
 
+    acl_raw = row.get("acl")
+    if isinstance(acl_raw, str):
+        try:
+            acl_raw = json.loads(acl_raw)
+        except Exception:
+            acl_raw = None
+
     return ThreadOut(
         id=thread_id,
         shortId=row.get("shortId"),
@@ -210,6 +217,7 @@ def _build_thread_out(row, all_rows: list, all_links: list) -> ThreadOut:
         source=row.get("source"),
         priority=row.get("priority"),
         status=row["status"],
+        acl=acl_raw,
         createdAt=row["createdAt"],
         updatedAt=row["updatedAt"],
     )
@@ -228,6 +236,9 @@ async def create_thread(data: ThreadCreate, _: TokenPayload = Depends(verify_tok
             ).scalar()
         next_short_id = (max_sid or 0) + 1
     trigger = data.trigger or {"type": "none", "fire_at": None, "cron": None, "location": None, "ack_status": "pending", "ack_timeout_at": None}
+    acl = data.acl or {"tier": "shared", "created_by": phone, "visible_to": []}
+    if not acl.get("created_by"):
+        acl["created_by"] = phone
     row = {
         "id": thread_id,
         "shortId": next_short_id,
@@ -238,6 +249,7 @@ async def create_thread(data: ThreadCreate, _: TokenPayload = Depends(verify_tok
         "entities": None,
         "triggerSource": phone,
         "trigger": json.dumps(trigger),
+        "acl": json.dumps(acl),
         "snoozeCount": 0,
         "source": getattr(data, "source", None) or "web",
         "priority": getattr(data, "priority", None),
@@ -248,7 +260,7 @@ async def create_thread(data: ThreadCreate, _: TokenPayload = Depends(verify_tok
     with engine.connect() as conn:
         conn.execute(insert(threads).values(**row))
         conn.commit()
-    out = {**row, "trigger": trigger}
+    out = {**row, "trigger": trigger, "acl": acl}
     return ThreadOut(**{k: v for k, v in out.items() if k in ThreadOut.model_fields})
 
 
@@ -353,6 +365,13 @@ class TriggerStatusUpdate(BaseModel):
 
 
 def _thread_trigger_summary(r, t: dict) -> dict:
+    acl_raw = r.get("acl")
+    if isinstance(acl_raw, str):
+        try:
+            acl_raw = json.loads(acl_raw)
+        except Exception:
+            acl_raw = {}
+    acl_tier = (acl_raw or {}).get("tier", "shared")
     return {
         "thread_id": r["id"],
         "short_id": r.get("shortId"),
@@ -361,6 +380,7 @@ def _thread_trigger_summary(r, t: dict) -> dict:
         "trigger_source": r.get("triggerSource"),
         "trigger": t,
         "family_id": None,
+        "acl_tier": acl_tier,
     }
 
 
@@ -780,6 +800,7 @@ async def alfred_execute(req: AlfredExecuteRequest):
             "location": None, "ack_status": "pending", "ack_timeout_at": None,
         }
         thread_title = parsed.get("title", title)
+        acl_reminder = {"tier": "shared", "created_by": phone, "visible_to": []}
         with engine.connect() as conn:
             next_sid = _next_short_id(conn, phone)
             thread_id = str(uuid.uuid4())
@@ -787,6 +808,7 @@ async def alfred_execute(req: AlfredExecuteRequest):
                 id=thread_id, shortId=next_sid,
                 title=thread_title, content=thread_title,
                 category="routine", trigger=json.dumps(trigger),
+                acl=json.dumps(acl_reminder),
                 snoozeCount=0, source="whatsapp",
                 triggerSource=phone, status="active",
                 createdAt=now, updatedAt=now,
@@ -807,6 +829,7 @@ async def alfred_execute(req: AlfredExecuteRequest):
                 "category": "routine",
                 "trigger": trigger,
                 "trigger_type": trigger_type,
+                "acl_tier": acl_reminder["tier"],
             },
         )
 
@@ -1035,6 +1058,7 @@ async def alfred_execute(req: AlfredExecuteRequest):
         now = datetime.now(timezone.utc).isoformat()
         thread_id = str(uuid.uuid4())
         trigger = {"type": "none", "fire_at": None, "cron": None, "location": None, "ack_status": "pending", "ack_timeout_at": None}
+        acl = {"tier": "shared", "created_by": phone, "visible_to": []}
         with engine.connect() as conn:
             next_sid = _next_short_id(conn, phone)
             conn.execute(insert(threads).values(
@@ -1044,6 +1068,7 @@ async def alfred_execute(req: AlfredExecuteRequest):
                 entities=json.dumps(thread_entities),
                 triggerSource=phone,
                 trigger=json.dumps(trigger),
+                acl=json.dumps(acl),
                 snoozeCount=0, source="whatsapp",
                 status="active", createdAt=now, updatedAt=now,
             ))
@@ -1122,6 +1147,7 @@ async def alfred_execute(req: AlfredExecuteRequest):
                 "category": category,
                 "trigger": trigger,
                 "intent_vector": intent_vector,
+                "acl_tier": acl["tier"],
             },
         )
 

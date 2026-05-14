@@ -65,6 +65,17 @@ def get_bridge_session(session_id: str) -> dict | None:
     return _normalize(response.json())
 
 
+def restart_bridge_session(session_id: str) -> dict:
+    """POST /sessions/{id}/restart — reinitializes the client without wiping the auth profile."""
+    try:
+        response = httpx.post(_url(f"/sessions/{session_id}/restart"), headers=_headers(), timeout=15.0)
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Bridge restart failed: {exc}") from exc
+    if response.is_error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=response.text or "Bridge restart failed")
+    return _normalize(response.json())
+
+
 def delete_bridge_session(session_id: str) -> None:
     try:
         httpx.delete(_url(f"/sessions/{session_id}"), headers=_headers(), timeout=15.0)

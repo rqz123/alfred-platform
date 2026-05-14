@@ -45,6 +45,7 @@ from app.services.auth_service import build_login_response, get_current_admin
 from app.services.bridge_service import (
     create_bridge_session,
     delete_bridge_session,
+    restart_bridge_session,
     get_bridge_session,
     list_bridge_sessions,
     normalize_phone_number,
@@ -184,6 +185,30 @@ def delete_connection_endpoint(
     delete_connection_record(session, connection_id)
     logger.info("Deleted WhatsApp connection id=%s session_id=%s", connection_id, conn.bridge_session_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@connection_router.post("/connections/{connection_id}/restart", response_model=ConnectionRead)
+def restart_connection_endpoint(
+    connection_id: int,
+    _: TokenPayload = Depends(get_current_admin),
+    session: Session = Depends(get_session),
+) -> ConnectionRead:
+    conn = get_connection_by_id(session, connection_id)
+    if conn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Connection not found")
+    bridge_session = restart_bridge_session(conn.bridge_session_id)
+    logger.info("Restarted WhatsApp connection id=%s session_id=%s", connection_id, conn.bridge_session_id)
+    return ConnectionRead(
+        id=conn.id,
+        bridge_session_id=conn.bridge_session_id,
+        label=conn.label,
+        created_at=conn.created_at,
+        status=bridge_session.get("status", "starting"),
+        qr_code_data_url=bridge_session.get("qr_code_data_url"),
+        connected_phone=bridge_session.get("connected_phone"),
+        connected_name=bridge_session.get("connected_name"),
+        last_error=bridge_session.get("last_error"),
+    )
 
 
 @message_router.get("/conversations/{conversation_id}/messages", response_model=list[MessageRead])
@@ -587,6 +612,54 @@ def receive_location_heartbeat(
         active_geofences,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@internal_router.get("/internal/traffic/{family_id}")
+def get_family_traffic(
+    family_id: str,
+    window_minutes: int = 5,
+    x_alfred_api_key: str | None = Header(default=None),
+    session: Session = Depends(get_session),
+) -> dict:
+    """Return inbound message count for a family within the given time window.
+
+    Called by Brain's Decision Arbiter for Observer Mode (6th check).
+    """
+    from datetime import datetime, timezone, timedelta
+    from sqlmodel import select, func
+    from app.models.chat import Message, Conversation, Contact
+    from app.models.account import AlfredUser
+
+    settings = get_settings()
+    valid_keys = {k for k in [settings.alfred_internal_key, settings.brain_api_key] if k}
+    if not valid_keys or x_alfred_api_key not in valid_keys:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid key")
+
+    since = datetime.now(timezone.utc) - timedelta(minutes=window_minutes)
+
+    # Phones of all family members
+    family_phones = [
+        u.phone
+        for u in session.exec(
+            select(AlfredUser).where(AlfredUser.family_id == family_id)
+        ).all()
+    ]
+    if not family_phones:
+        return {"family_id": family_id, "message_count": 0, "window_minutes": window_minutes}
+
+    # Join Message → Conversation → Contact and count inbound messages
+    count = session.exec(
+        select(func.count(Message.id))
+        .join(Conversation, Message.conversation_id == Conversation.id)
+        .join(Contact, Conversation.contact_id == Contact.id)
+        .where(
+            Contact.phone_number.in_(family_phones),
+            Message.direction == "inbound",
+            Message.created_at >= since,
+        )
+    ).one()
+
+    return {"family_id": family_id, "message_count": count or 0, "window_minutes": window_minutes}
 
 
 # ── Log viewer (admin only) ───────────────────────────────────────────────────

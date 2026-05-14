@@ -6,6 +6,7 @@ import {
   alfredUsers,
   fetchConnections,
   createConnection,
+  restartConnection,
   deleteConnection,
 } from "../lib/api/gateway";
 
@@ -125,18 +126,13 @@ export default function SettingsPage() {
   }
 
   async function handleReconnect() {
-    if (!alfredToken) return;
+    if (!alfredToken || !conn) return;
     setConnWorking(true);
     setConnError("");
     try {
-      if (conn) {
-        try {
-          await deleteConnection(alfredToken, conn.id);
-        } catch {
-          // Connection may already be gone — proceed to create a new one
-        }
-      }
-      await createConnection(alfredToken, "Alfred Bot");
+      // Restart reinitializes the Bridge client without wiping the auth profile,
+      // so an already-linked WhatsApp device reconnects automatically.
+      await restartConnection(alfredToken, conn.id);
       await loadConn();
       stopPoll();
       pollRef.current = setInterval(loadConn, 3000);
@@ -150,7 +146,7 @@ export default function SettingsPage() {
 
   async function handleDisconnect() {
     if (!alfredToken || !conn) return;
-    if (!confirm("Disconnect Alfred's WhatsApp bot? Reminders and incoming messages will stop working.")) return;
+    if (!confirm("Forget this WhatsApp linked device? Alfred will lose its pairing and you will need to scan a new QR code to reconnect.")) return;
     setConnWorking(true);
     setConnError("");
     try {
@@ -271,13 +267,13 @@ export default function SettingsPage() {
           {conn && conn.status === "offline" && (
             <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
               <span style={{ color: "#92400e", fontSize: "0.9rem" }}>
-                ⚠ Bot is offline — click Reconnect to get a new QR code.
+                ⚠ Bot is offline — click Reconnect to recover the existing session.
               </span>
               <button onClick={handleReconnect} disabled={connWorking} style={btnStyle}>
                 {connWorking ? "Reconnecting…" : "Reconnect"}
               </button>
               <button onClick={handleDisconnect} disabled={connWorking} style={dangerBtnStyle}>
-                Remove
+                Forget Device
               </button>
             </div>
           )}

@@ -3,6 +3,13 @@ import cors from "cors";
 import dotenv from "dotenv";
 import QRCode from "qrcode";
 import { randomUUID } from "crypto";
+import { rm } from "fs/promises";
+import { existsSync } from "fs";
+import { join } from "path";
+import { execFile } from "child_process";
+import { promisify } from "util";
+
+const execFileAsync = promisify(execFile);
 import whatsappWeb from "whatsapp-web.js";
 
 const { Client, LocalAuth, MessageMedia } = whatsappWeb;
@@ -153,6 +160,47 @@ function wireClientEvents(session) {
   // uses opaque LID chat IDs (e.g. 101615268835354@lid) that don't match real phone numbers.
 }
 
+// Per-session in-flight initialize() promises and "being deleted" markers.
+const _initPromises = new Map(); // sessionId -> Promise
+const _deletingSet  = new Set(); // sessionIds currently undergoing destructive delete
+
+async function _killChromiumForProfile(authDir) {
+  try {
+    await execFileAsync("pkill", ["-9", "-f", authDir], { timeout: 3000 });
+    await new Promise((r) => setTimeout(r, 800));
+  } catch (_) {
+    // pkill exits non-zero when no processes matched — safe to ignore.
+  }
+}
+
+async function _hasChromiumProcs(authDir) {
+  try {
+    const { stdout } = await execFileAsync("pgrep", ["-f", authDir], { timeout: 3000 });
+    return stdout.trim().length > 0;
+  } catch (_) {
+    return false; // pgrep exits non-zero when nothing found
+  }
+}
+
+// Kill Chrome, wipe the auth dir, and verify both conditions hold.
+// Retries up to 5 times in case Chrome recreates the profile after each kill.
+async function _forceWipeAuthProfile(authDir, sessionId) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await _killChromiumForProfile(authDir);
+    await rm(authDir, { recursive: true, force: true }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 600));
+    const dirGone   = !existsSync(authDir);
+    const chromeLive = await _hasChromiumProcs(authDir);
+    if (dirGone && !chromeLive) return; // fully clean
+    log("warn", "Auth wipe incomplete, retrying", { sessionId, attempt, dirGone, chromeLive });
+  }
+  const dirStillExists = existsSync(authDir);
+  const chromeLive     = await _hasChromiumProcs(authDir);
+  if (dirStillExists || chromeLive) {
+    throw new Error(`Forget Device failed after retries: dir=${dirStillExists} chrome=${chromeLive}`);
+  }
+}
+
 function createSession(sessionId) {
   if (sessions.has(sessionId)) {
     return sessions.get(sessionId);
@@ -175,17 +223,61 @@ function createSession(sessionId) {
 
   sessions.set(sessionId, session);
   wireClientEvents(session);
-  client.initialize();
+
+  const authDir = join(process.cwd(), ".wwebjs_auth", `session-${sessionId}`);
+  const initPromise = client.initialize()
+    .catch((err) => {
+      if (_deletingSet.has(sessionId)) {
+        // This session is being deleted — a late init completion could recreate the profile.
+        // Kill Chrome and wipe any profile fragments it may have written.
+        log("warn", "Late init error on deleting session — cleaning up", { sessionId });
+        _killChromiumForProfile(authDir)
+          .then(() => rm(authDir, { recursive: true, force: true }))
+          .catch(() => {});
+      } else {
+        session.status = "error";
+        session.lastError = String(err);
+        log("error", "Session init failed — Bridge kept alive", { sessionId, error: String(err) });
+      }
+    })
+    .finally(() => { _initPromises.delete(sessionId); });
+
+  _initPromises.set(sessionId, initPromise);
   log("info", "Session created and initializing", { sessionId });
   return session;
 }
 
-async function destroySession(sessionId) {
+async function destroySession(sessionId, { wipeAuth = false } = {}) {
   const session = sessions.get(sessionId);
   if (!session) return false;
+
+  const authDir = join(process.cwd(), ".wwebjs_auth", `session-${sessionId}`);
+
+  if (wipeAuth) {
+    // Mark as deleting BEFORE killing Chrome so any late init handlers see the flag.
+    _deletingSet.add(sessionId);
+    // Kill Chrome first — this causes the in-flight initialize() to reject quickly
+    // rather than waiting for the full 8 s timeout.
+    await _killChromiumForProfile(authDir);
+  }
+
+  // Await the in-flight initialize() (now likely already rejected by the kill above).
+  const initPromise = _initPromises.get(sessionId);
+  if (initPromise) {
+    await Promise.race([initPromise, new Promise((r) => setTimeout(r, 5000))]);
+  }
+
   try { await session.client.destroy(); } catch (_) { /* ignore */ }
   sessions.delete(sessionId);
-  log("info", "Session destroyed", { sessionId });
+  _initPromises.delete(sessionId);
+
+  if (wipeAuth) {
+    await _forceWipeAuthProfile(authDir, sessionId);
+    _deletingSet.delete(sessionId);
+    log("info", "Session destroyed + auth wiped", { sessionId });
+  } else {
+    log("info", "Session destroyed (auth preserved)", { sessionId });
+  }
   return true;
 }
 
@@ -212,10 +304,26 @@ app.get("/sessions/:id", requireBridgeKey, (req, res) => {
   res.json(sessionToJson(session));
 });
 
+app.post("/sessions/:id/restart", requireBridgeKey, async (req, res) => {
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ detail: "Session not found" });
+  // Reinitialize in-memory client without touching the auth profile.
+  // Existing WhatsApp linked-device session is preserved and will auto-reconnect.
+  await destroySession(req.params.id, { wipeAuth: false });
+  const newSession = createSession(req.params.id);
+  res.json(sessionToJson(newSession));
+});
+
 app.delete("/sessions/:id", requireBridgeKey, async (req, res) => {
-  const ok = await destroySession(req.params.id);
-  if (!ok) return res.status(404).json({ detail: "Session not found" });
-  res.status(204).send();
+  try {
+    const ok = await destroySession(req.params.id, { wipeAuth: true });
+    if (!ok) return res.status(404).json({ detail: "Session not found" });
+    res.status(204).send();
+  } catch (err) {
+    // Auth directory could not be removed (e.g. Chromium still held file handles).
+    log("error", "Forget Device failed", { sessionId: req.params.id, error: String(err) });
+    res.status(500).json({ detail: String(err) });
+  }
 });
 
 app.post("/sessions/:id/messages/text", requireBridgeKey, async (req, res) => {

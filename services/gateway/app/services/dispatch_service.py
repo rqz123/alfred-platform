@@ -295,13 +295,17 @@ def _broadcast_create_event(
         'category',
         'currency',
         'trigger',
+        'acl_tier',
     ):
         if resp_data.get(key) is not None:
             enriched_entities[key] = resp_data[key]
 
+    subject = f"alfred.family.{family_id}.events.create" if family_id else "alfred.events.create"
     event = {
         'event_action': 'CREATE',
         'event_type': intent,
+        'service': 'thread',
+        'subject': subject,
         'entities': enriched_entities,
         'user_id': phone,
         'family_id': family_id,

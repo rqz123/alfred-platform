@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     intent_openai_model: str = "gpt-4o-mini"
     brain_url: str = "http://localhost:8003"
     brain_api_key: str = ""
+    bot_phone_number: str = ""             # WhatsApp bot number for invite card deep links
 
     model_config = SettingsConfigDict(
         # Try root monorepo .env first, then local .env for overrides

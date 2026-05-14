@@ -151,7 +151,7 @@ function UsersTab({ adminPhone }: { adminPhone: string }) {
   async function handleSetFamily(phone: string, family_id: string | null) {
     setError("");
     try {
-      await alfredUsers.update(adminPhone, phone, { family_id: family_id ?? undefined });
+      await alfredUsers.update(adminPhone, phone, { family_id: family_id });
       load();
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Failed to update family");

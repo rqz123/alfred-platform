@@ -1,11 +1,11 @@
 import re
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from sqlmodel import Session, select
 
-from app.models.account import AlfredFamily, AlfredUser
+from app.models.account import AlfredFamily, AlfredUser, InviteToken
 
 
 def _new_id(prefix: str) -> str:
@@ -158,3 +158,68 @@ def get_family_members(session: Session, family_id: str) -> list[AlfredUser]:
     return list(
         session.exec(select(AlfredUser).where(AlfredUser.family_id == family_id)).all()
     )
+
+
+# ── Invite Tokens ──────────────────────────────────────────────────────────────
+
+def create_invite_token(
+    session: Session,
+    family_id: str,
+    created_by: str,
+    invitee_name: str,
+    token_id: str,
+    weaving_hook_id: Optional[str] = None,
+) -> InviteToken:
+    now = _utc_now()
+    token = InviteToken(
+        token_id=token_id,
+        family_id=family_id,
+        created_by=created_by,
+        invitee_name=invitee_name,
+        status="pending",
+        weaving_hook_id=weaving_hook_id,
+        created_at=now,
+        expires_at=now + timedelta(days=7),
+    )
+    session.add(token)
+    session.commit()
+    session.refresh(token)
+    return token
+
+
+def get_invite_token(session: Session, token_id: str) -> Optional[InviteToken]:
+    return session.get(InviteToken, token_id)
+
+
+def count_pending_tokens(session: Session, family_id: str, created_by: str) -> int:
+    now = _utc_now()
+    rows = session.exec(
+        select(InviteToken).where(
+            InviteToken.family_id == family_id,
+            InviteToken.created_by == created_by,
+            InviteToken.status == "pending",
+            InviteToken.expires_at > now,
+        )
+    ).all()
+    return len(rows)
+
+
+def claim_invite_token(
+    session: Session,
+    token: InviteToken,
+    used_by_user_id: str,
+) -> bool:
+    """Atomic CAS: pending → used. Returns True on success."""
+    expires_at = token.expires_at if token.expires_at.tzinfo else token.expires_at.replace(tzinfo=timezone.utc)
+    if token.status != "pending" or expires_at < _utc_now():
+        return False
+    token.status = "used"
+    token.used_at = _utc_now()
+    token.used_by_user_id = used_by_user_id
+    session.add(token)
+    try:
+        session.commit()
+        return True
+    except Exception:
+        session.rollback()
+        return False

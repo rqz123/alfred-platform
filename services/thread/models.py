@@ -47,6 +47,7 @@ class ThreadCreate(BaseModel):
     trigger: Optional[dict] = None          # set by add_reminder; None for plain add_thread
     source: Optional[str] = "web"
     priority: Optional[str] = None
+    acl: Optional[dict] = None             # {tier, created_by, visible_to}; auto-filled if omitted
 
 
 class ThreadOut(BaseModel):
@@ -64,6 +65,7 @@ class ThreadOut(BaseModel):
     source: Optional[str] = None
     priority: Optional[str] = None
     status: str
+    acl: Optional[dict] = None             # {tier, created_by, visible_to}
     createdAt: str
     updatedAt: str
 

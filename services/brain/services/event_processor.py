@@ -57,6 +57,8 @@ def _process_thread(event: dict, entities: dict, user_id: str, family_id: str) -
     category = entities.get("category") or "life"
     trigger_type = (entities.get("trigger") or {}).get("type") or "none"
 
+    acl_tier = entities.get("acl_tier") or "shared"
+
     qdrant_service.upsert_thread(
         family_id=family_id,
         thread_id=thread_id,
@@ -66,6 +68,7 @@ def _process_thread(event: dict, entities: dict, user_id: str, family_id: str) -
             "content": content[:200],
             "category": category,
             "trigger_type": trigger_type,
+            "acl_tier": acl_tier,
             "intent_vector": [
                 float(intent_vector.get("urgency", 0.5)),
                 float(intent_vector.get("social_bond", 0.5)),
@@ -89,6 +92,7 @@ def _process_thread(event: dict, entities: dict, user_id: str, family_id: str) -
         thread_id=thread_id,
         thread_embedding=embedding,
         intent_vector=intent_vector,
+        acl_tier=acl_tier,
     )
 
 
