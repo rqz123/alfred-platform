@@ -17,7 +17,7 @@ logger = logging.getLogger("ourcents.routes")
 from datetime import date, datetime, timedelta
 from typing import Any, List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Request, Response, UploadFile, status
 from pydantic import BaseModel
 
 # Ensure shared package is importable (monorepo root on path)

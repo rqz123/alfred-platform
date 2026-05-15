@@ -516,9 +516,11 @@ def _next_short_id(conn, phone: str) -> int:
 
 @router.delete("/alfred/admin/clear", status_code=204, dependencies=[Depends(_verify_alfred_key)])
 async def admin_clear_threads():
-    """Clear all threads (dev/test only)."""
+    """Clear all threads and legacy reminders (dev/test only)."""
     with engine.connect() as conn:
+        conn.execute(delete(thread_links))
         conn.execute(delete(threads))
+        conn.execute(delete(reminders))
         conn.commit()
 
 

@@ -1,47 +1,45 @@
 # Alfred Platform - Shared Dev/Test Status
 
-STATUS: test_passed
-LAST_UPDATED: 2026-05-14 09:35 PDT
-MILESTONE: Settings / Alfred Bot connection UX
+STATUS: qa_pass
+LAST_UPDATED: 2026-05-14 23:46 PDT
+MILESTONE: WA Bot connection safety
 BRANCH: main
 
 ## CURRENT_TASK
-Round 8 clean retest: verify Bot Reconnect is non-destructive and Forget Device is destructive using the updated Bridge process.
+Backup selection ordering retest completed.
 
 ## CLAUDE_DEV_OUTPUT
-Fixed `bridge/src/server.mjs` for Chrome profile recreation race:
-- Added `_deletingSet` guard.
-- Kill Chrome before waiting on in-flight init for destructive delete.
-- Added retry-verified auth profile wipe.
-- DELETE returns failure if profile cannot be cleaned.
+Fixed:
+- Restore now selects latest backup by mtime (`ls -td ... | head -1`).
+- Backup script now uses UTC timestamps (`date -u +%Y%m%d-%H%M%S`).
 
 ## CODEX_TEST_OUTPUT
-Result: PASS after killing a stale orphan Bridge process and restarting the stack cleanly.
+Passed:
+- `./start.sh` restored all services from a stopped state without QR relink.
+- Bridge auto-recovered to:
+  - session `9e6bd8b4-a0fd-4595-b2b1-ba0dcd550e7f`
+  - `status=connected`
+  - `connected_phone=8613521442639`
+  - `connected_name=Alfred`
+  - `last_error=null`
+- Ran `./scripts/backup-gateway-connection.sh`.
+  - Exit code 0.
+  - Created UTC-named backup: `data/backups/gateway-connection-20260515-064611`.
+  - Snapshot included current connected session and copied `.wwebjs_auth/session-9e6bd8b4-a0fd-4595-b2b1-ba0dcd550e7f`.
+- Ran `./scripts/restore-gateway-connection.sh` with no args.
+  - Exit code 0.
+  - Selected backup: `data/backups/gateway-connection-20260515-064611`.
+  - `latest_mtime` was also `data/backups/gateway-connection-20260515-064611`.
+  - Therefore restore now selects latest actual backup by mtime correctly.
+  - Since Bot was already connected, restore skipped restart.
+  - Bridge destroy/restart counter did not increase (`destroyed_before=0`, `destroyed_after=0`).
+- Final `./status.sh` shows gateway, ourcents, thread, brain, and bridge all healthy.
 
-Verified:
-- Gateway syntax check passed for `services/gateway/app/api/routes.py` and `services/gateway/app/services/bridge_service.py`.
-- Bridge syntax check passed for `bridge/src/server.mjs`.
-- Web build passed.
-- Local stack is healthy: Gateway, OurCents, Thread, Brain, Bridge.
-- Actual Bridge listener after clean restart: PID 13766 on port 3001.
+Not run:
+- `--force-restart` still not run because it intentionally restarts the real connected Bot.
+- Real `clear-all-data` still not run because Richard did not explicitly authorize another destructive clear.
 
-Runtime test:
-- Created a fresh Gateway connection.
-- Inserted a marker file into `.wwebjs_auth/session-855544e9-d59b-427e-b495-16a35701123c`.
-- Called Reconnect/Restart via Gateway.
-- Marker survived restart: PASS.
-- Called Forget Device via Gateway.
-- DELETE returned HTTP 204.
-- Auth dir after delete: absent.
-- Bridge `/sessions`: deleted session not listed.
-- Host process check: zero Chromium processes using that auth profile.
-
-Bridge log confirms the intended new path executed:
-- `Late init error on deleting session — cleaning up`
-- `Session destroyed + auth wiped`
-
-Residual issue found during retest setup:
-- An old orphan Bridge process from the previous run was still listening on port 3001 as PID 4268, while `.logs/bridge.pid` pointed elsewhere.
-- `start.sh` initially reported healthy because it hit that old process, while the new Bridge failed with `EADDRINUSE`.
-- This can make future tests accidentally hit stale code.
-- Recommended follow-up: make `start.sh`/`stop.sh` detect and handle existing listeners on managed ports, or verify that the listening PID matches the PID just started.
+QA conclusion:
+- Backup ordering bug is fixed.
+- Safe backup + default restore path passes.
+- WA Bot connection remains healthy.

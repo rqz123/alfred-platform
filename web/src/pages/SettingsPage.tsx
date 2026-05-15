@@ -264,10 +264,23 @@ export default function SettingsPage() {
             </div>
           )}
 
-          {conn && conn.status === "offline" && (
+          {conn && (conn.status === "starting" || conn.status === "authenticated") && (
+            <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
+              <span style={{ color: "#1d4ed8", fontSize: "0.9rem" }}>
+                ⟳ Bot is connecting — authenticated but not yet ready.
+              </span>
+              <button onClick={handleReconnect} disabled={connWorking} style={btnStyle}>
+                {connWorking ? "Reconnecting…" : "Reconnect"}
+              </button>
+            </div>
+          )}
+
+          {conn && (conn.status === "offline" || conn.status === "disconnected" || conn.status === "error") && (
             <div style={{ display: "flex", alignItems: "center", gap: "1rem", flexWrap: "wrap" }}>
               <span style={{ color: "#92400e", fontSize: "0.9rem" }}>
-                ⚠ Bot is offline — click Reconnect to recover the existing session.
+                {conn.status === "error"
+                  ? `⚠ Bot error${conn.last_error ? `: ${conn.last_error}` : ""} — click Reconnect to recover.`
+                  : "⚠ Bot is offline — click Reconnect to recover the existing session."}
               </span>
               <button onClick={handleReconnect} disabled={connWorking} style={btnStyle}>
                 {connWorking ? "Reconnecting…" : "Reconnect"}

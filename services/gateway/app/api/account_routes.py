@@ -6,7 +6,12 @@ admin record.  The resolve endpoint is open (internal network only).
 Bootstrap is open and idempotent-guarded (rejects after first use).
 """
 
+import json
 import logging
+import os
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
 
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
@@ -298,6 +303,27 @@ def delete_family(
     repo.delete_family(session, family)
 
 
+def _backup_wa_connection() -> None:
+    """Metadata-only snapshot of whatsappconnection rows to data/backups/ before any clear.
+    Does NOT copy .wwebjs_auth — for a full backup including auth profiles use
+    scripts/backup-gateway-connection.sh instead."""
+    try:
+        db_url = os.environ.get("DATABASE_URL", "")
+        db_path = db_url.replace("sqlite:///", "")
+        if not db_path or not Path(db_path).exists():
+            return
+        repo_root = Path(db_path).parent.parent
+        backup_dir = repo_root / "data" / "backups" / f"gateway-connection-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        db = sqlite3.connect(db_path)
+        db.row_factory = sqlite3.Row
+        rows = [dict(r) for r in db.execute("SELECT * FROM whatsappconnection")]
+        (backup_dir / "connection.json").write_text(json.dumps(rows, indent=2, default=str))
+        logger.info("WA connection backup saved: %s (%d row(s))", backup_dir, len(rows))
+    except Exception as exc:
+        logger.warning("WA connection backup failed (non-fatal): %s", exc)
+
+
 # ── Danger zone ────────────────────────────────────────────────────────────────
 
 @alfred_router.delete("/admin/clear-all-data", status_code=status.HTTP_204_NO_CONTENT)
@@ -309,14 +335,21 @@ def clear_all_data(
     from app.repositories.chat_repository import delete_all_conversations
     from app.services.service_registry import ServiceRegistry
 
+    # 0. Auto-backup WA connection metadata before clearing (never clears connections, but
+    #    snapshot protects against accidental DB reset / migration wipe).
+    _backup_wa_connection()
+
     # 1. Clear gateway chat
     delete_all_conversations(session)
 
     # 2. Clear OurCents receipts and income entries
     # 3. Clear nudge threads
     registry = ServiceRegistry()
-    _clear_service(registry, intent="add_expense", path="/alfred/admin/clear")
-    _clear_service(registry, intent="add_reminder", path="/alfred/admin/clear")
+    failures: list[str] = []
+    _clear_service(registry, intent="add_expense", path="/alfred/admin/clear", failures=failures)
+    _clear_service(registry, intent="add_reminder", path="/alfred/admin/clear", failures=failures)
+    if failures:
+        raise HTTPException(status_code=500, detail=f"Partial clear failure: {'; '.join(failures)}")
 
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
@@ -332,7 +365,7 @@ def clear_logs(
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-def _clear_service(registry, intent: str, path: str) -> None:
+def _clear_service(registry, intent: str, path: str, failures: list[str] | None = None) -> None:
     svc = registry.find_service(intent)
     if not svc:
         return
@@ -340,6 +373,12 @@ def _clear_service(registry, intent: str, path: str) -> None:
     try:
         r = httpx.delete(url, headers={"X-Alfred-Api-Key": svc["api_key"]}, timeout=10.0)
         if r.status_code not in (200, 204):
-            logger.warning("clear_all_data: %s returned %d", url, r.status_code)
+            msg = f"{url} returned {r.status_code}"
+            logger.warning("clear_all_data: %s", msg)
+            if failures is not None:
+                failures.append(msg)
     except Exception as exc:
-        logger.warning("clear_all_data: failed to reach %s: %s", url, exc)
+        msg = f"{url} unreachable: {exc}"
+        logger.warning("clear_all_data: %s", msg)
+        if failures is not None:
+            failures.append(msg)

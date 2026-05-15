@@ -27,6 +27,12 @@ else
   echo "  (no .pids file)"
 fi
 
+# Step 1b: Kill any Chromium processes still using Bridge auth profiles
+BRIDGE_AUTH_DIR="$REPO/bridge/.wwebjs_auth"
+if [ -d "$BRIDGE_AUTH_DIR" ]; then
+  pkill -9 -f "$BRIDGE_AUTH_DIR" 2>/dev/null || true
+fi
+
 # Step 2: Kill anything still holding the known ports (catches orphaned workers)
 sleep 1
 LEFTOVERS=$(lsof -ti :"$PORTS" 2>/dev/null)

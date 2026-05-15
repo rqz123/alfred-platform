@@ -225,7 +225,9 @@ function createSession(sessionId) {
   wireClientEvents(session);
 
   const authDir = join(process.cwd(), ".wwebjs_auth", `session-${sessionId}`);
-  const initPromise = client.initialize()
+  // Kill any stale Chromium from a previous crash or unclean stop before initializing.
+  const preKill = existsSync(authDir) ? _killChromiumForProfile(authDir) : Promise.resolve();
+  const initPromise = preKill.then(() => client.initialize())
     .catch((err) => {
       if (_deletingSet.has(sessionId)) {
         // This session is being deleted — a late init completion could recreate the profile.
